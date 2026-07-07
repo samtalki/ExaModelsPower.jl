@@ -1,12 +1,11 @@
 function parse_mp_power_data(
-    filename,
+    net,
     N,
     corrective_action_ratio,
-    T = Float64;
-    from = nothing,
+    T = Float64,
 )
 
-    data = parse_ac_power_data(filename, T; from = from)
+    data = PowerIO.parse_ac_power_data(net; T = T)
 
     nbus = length(data.bus)
 
@@ -27,35 +26,12 @@ function parse_mp_power_data(
     return data
 end
 
-function update_load_data(busarray, curve)
-
-    for t in eachindex(curve)
-        for x in 1:size(busarray, 1)
-            row = busarray[x, t]
-            b = row.b
-            busarray[x, t] = (
-                b = merge(b, (;
-                    pd = b.pd * curve[t],
-                    qd = b.qd * curve[t],
-                    gs = b.gs * curve[t],
-                    bs = b.bs * curve[t],
-                )),
-                t = row.t,
-            )
-        end
-    end
-end
-
-#Pd, Qd as input
-function update_load_data(busarray, pd, qd, baseMVA)
-    for (idx ,pd_t) in pairs(pd)
-        row = busarray[idx[1], idx[2]]
-        b = row.b
-        busarray[idx[1], idx[2]] = (
-            b = merge(b, (;
-                pd = pd_t / baseMVA,
-                qd = qd[idx[1], idx[2]] / baseMVA,
-            )),
+#Write the per-period loads from a PowerIO.LoadSeries onto each (bus, period) entry
+function apply_load_series!(busarray, series)
+    for t in axes(busarray, 2), x in axes(busarray, 1)
+        row = busarray[x, t]
+        busarray[x, t] = (
+            b = merge(row.b, (; pd = series.pd[x, t], qd = series.qd[x, t])),
             t = row.t,
         )
     end
@@ -409,8 +385,9 @@ function mpopf_model(
 )
 
     @assert length(curve) > 0
-    data = parse_mp_power_data(filename, N, corrective_action_ratio, T; from = from)
-    update_load_data(data.busarray, curve)
+    net = parse_mp_network(filename; from = from)
+    data = parse_mp_power_data(net, N, corrective_action_ratio, T)
+    apply_load_series!(data.busarray, PowerIO.LoadSeries(net, curve; T = T))
     data = convert_data(data,backend)
     Nbus = size(data.bus, 1)
 
@@ -423,9 +400,9 @@ end
 
 function mpopf_model(
     filename, active_power_data, reactive_power_data;
-    pd = readdlm(active_power_data),
-    qd = readdlm(reactive_power_data),
-    N = size(pd, 2),
+    pd = nothing,
+    qd = nothing,
+    N = nothing,
     corrective_action_ratio = 0.1,
     backend = nothing,
     form = :polar,
@@ -436,11 +413,15 @@ function mpopf_model(
     kwargs...,
 )
 
-    data = parse_mp_power_data(filename, N, corrective_action_ratio, T; from = from)
-    update_load_data(data.busarray, pd, qd, data.baseMVA[])
+    net = parse_mp_network(filename; from = from)
+    series = pd === nothing && qd === nothing ?
+        PowerIO.read_load_series(net, active_power_data, reactive_power_data; T = T) :
+        PowerIO.LoadSeries(net, pd, qd; T = T)
+    N = N === nothing ? PowerIO.n_periods(series) : N
+    data = parse_mp_power_data(net, N, corrective_action_ratio, T)
+    apply_load_series!(data.busarray, series)
     data = convert_data(data,backend)
     Nbus = size(data.bus, 1)
-    @assert Nbus == size(pd, 1)
 
     if form != :polar && form != :rect
         error("Invalid coordinate symbol - valid options are :polar or :rect")
@@ -463,8 +444,9 @@ function mpopf_model(
 )
 
     @assert length(curve) > 0
-    data = parse_mp_power_data(filename, N, corrective_action_ratio, T; from = from)
-    update_load_data(data.busarray, curve)
+    net = parse_mp_network(filename; from = from)
+    data = parse_mp_power_data(net, N, corrective_action_ratio, T)
+    apply_load_series!(data.busarray, PowerIO.LoadSeries(net, curve; T = T))
     data = convert_data(data,backend)
     Nbus = size(data.bus, 1)
 
@@ -477,9 +459,9 @@ end
 
 function mpopf_model(
     filename, active_power_data, reactive_power_data, discharge_func::Function;
-    pd = readdlm(active_power_data),
-    qd = readdlm(reactive_power_data),
-    N = size(pd, 2),
+    pd = nothing,
+    qd = nothing,
+    N = nothing,
     corrective_action_ratio = 0.1,
     backend = nothing,
     form = :polar,
@@ -490,12 +472,15 @@ function mpopf_model(
     kwargs...,
 )
 
-
-    data = parse_mp_power_data(filename, N, corrective_action_ratio, T; from = from)
-    update_load_data(data.busarray, pd, qd, data.baseMVA[])
+    net = parse_mp_network(filename; from = from)
+    series = pd === nothing && qd === nothing ?
+        PowerIO.read_load_series(net, active_power_data, reactive_power_data; T = T) :
+        PowerIO.LoadSeries(net, pd, qd; T = T)
+    N = N === nothing ? PowerIO.n_periods(series) : N
+    data = parse_mp_power_data(net, N, corrective_action_ratio, T)
+    apply_load_series!(data.busarray, series)
     data = convert_data(data,backend)
     Nbus = size(data.bus, 1)
-    @assert Nbus == size(pd, 1)
 
     if form != :polar && form != :rect
         error("Invalid coordinate symbol - valid options are :polar or :rect")
