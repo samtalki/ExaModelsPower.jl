@@ -15,7 +15,7 @@ function goc3_model(
     sc_data, lengths, producers_first = parse_sc_data(data, uc_data, data_json)
     @info "parsed data"
     
-    (L_J_xf, L_J_ln, L_J_ac, L_J_dc, L_J_br, L_J_cs,
+    (; L_J_xf, L_J_ln, L_J_ac, L_J_dc, L_J_br, L_J_cs,
     L_J_pr, L_J_cspr, L_J_sh, I, L_T, L_N_p, L_N_q, L_W_en_min_pr,
      L_W_en_min_cs, L_W_en_max_pr, L_W_en_max_cs, K) = lengths
     

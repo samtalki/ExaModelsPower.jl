@@ -91,13 +91,7 @@ function sc_tests(filename, backend, T)
 end
 
 function test_goc3_parser_boundary(sc_data, lengths)
-    # lengths is the positional tuple assembled in src/sc_parser.jl (parse_sc_data).
-    # These indices track that order: 2 => L_J_ln, 3 => L_J_ac, 11 => L_T, 12 => L_N_p.
-    # If that tuple is reordered, update these (and the positional destructures in
-    # scopf.jl and sc_parser.jl that read the same tuple).
-    L_J_ln = lengths[2]
-    L_J_ac = lengths[3]
-    L_N_p = lengths[12]
+    (; L_J_ln, L_J_ac, L_N_p) = lengths
 
     @test all(r -> r.j == r.j_ac && r.j_ac == r.j_ln, sc_data.aclbrancharray)
     @test all(r -> r.j == r.j_ac && r.j_ac == r.j_xf + L_J_ln, sc_data.acxbrancharray)
@@ -125,6 +119,16 @@ function test_goc3_parser_boundary(sc_data, lengths)
     end
     if !isempty(sc_data.jtk_xf_flattened)
         @test propertynames(first(sc_data.jtk_xf_flattened))[1:5] == (:flat_jtk_xf, :ctg, :j, :j_ac, :j_xf)
+    end
+
+    # The static SCOPF rows feed ExaModels kernels; a PowerIO regression that
+    # widened any row eltype to a Union/abstract would break the GPU path, so
+    # keep every array element type concrete. Surfaces on CPU, no GPU runner.
+    for f in (:busarray, :k_busarray, :shuntarray, :k_shuntarray, :prarray, :csarray,
+              :k_prarray, :k_csarray, :aclbrancharray, :acxbrancharray, :dclinearray,
+              :preservearray, :qreservearray, :jtk_ln_flattened, :jtk_xf_flattened,
+              :jtk_dc_flattened, :p_jtm_flattened_pr, :p_jtm_flattened_cs)
+        @test isconcretetype(eltype(getproperty(sc_data, f)))
     end
 end
 
@@ -160,7 +164,7 @@ function test_goc3_reactive_capability_rows(filename, uc_filename)
     data = PowerIO.parse_goc3_json(data_json)
     uc_data = JSON.parsefile(uc_filename)
     sc_data, lengths, _ = ExaModelsPower.parse_sc_data(data, uc_data, data_json)
-    L_T = lengths[11]
+    L_T = lengths.L_T
 
     @test length(sc_data.prarray_pqbounds) == L_T
     @test length(sc_data.prarray_pqe) == L_T

@@ -23,7 +23,6 @@ end
 
 _uidnum(s) = parse(Int, match(r"\d+", s).match)
 
-const goc3_bus_id = PowerIO.goc3_bus_id
 const get_as = PowerIO.goc3_interval_bounds
 
 # Shutdown power capability p_sdpc[j_prcs, t, t_prime]. Model-specific: it is
@@ -64,8 +63,10 @@ function parse_sc_data(data, uc_data, data_json)
     producers_first = data.sdd_lookup[minimum(keys(data.sdd_lookup))]["device_type"] == "producer"
     sc_data, lengths, cost_vector_pr, cost_vector_cs = PowerIO.goc3_static_data(data)
 
-    (L_J_xf, L_J_ln, L_J_ac, L_J_dc, L_J_br, L_J_cs,
-    L_J_pr, L_J_cspr, L_J_sh, I, L_T, L_N_p, L_N_q) = lengths
+    # `lengths` is PowerIO's NamedTuple of static index-set sizes. Bind the names
+    # this function uses by name; the four energy-window lengths and K are computed
+    # below and merged onto `lengths` before it is returned.
+    (; L_J_ln, L_J_ac, L_J_br, L_J_cs, L_J_pr, L_J_cspr, L_T, L_N_p) = lengths
 
     # Thread this model's stacked global variable indices onto PowerIO's general
     # rows, reproducing the numbering the model layer expects.
@@ -99,7 +100,7 @@ function parse_sc_data(data, uc_data, data_json)
     PowerIO.goc3_add_status_flags!(uc_data["time_series_output"]["simple_dispatchable_device"], data.sdd_lookup)
 
     T_supc_pr = [
-            (j = parse(Int, match(r"\d+", val["uid"]).match) + L_J_br + 1,
+            (j = _uidnum(val["uid"]) + L_J_br + 1,
             j_pr=get_j_pr(val["uid"], L_J_pr, L_J_cs, producers_first),
             j_prcs=get_j_prcs(val["uid"], L_J_pr, L_J_cs, producers_first),
             t = t,
@@ -127,7 +128,7 @@ function parse_sc_data(data, uc_data, data_json)
     end
 
     T_supc_cs = [
-            (j = parse(Int, match(r"\d+", val["uid"]).match) + L_J_br + 1,
+            (j = _uidnum(val["uid"]) + L_J_br + 1,
             j_cs=get_j_cs(val["uid"], L_J_pr, L_J_cs, producers_first),
             j_prcs=get_j_prcs(val["uid"], L_J_pr, L_J_cs, producers_first),
             t = t,
@@ -157,19 +158,19 @@ function parse_sc_data(data, uc_data, data_json)
     p_sdpc = goc3_shutdown_power_cap(data, lengths, producers_first)
 
     T_sdpc_pr = [
-            (j = parse(Int, match(r"\d+", val["uid"]).match) + L_J_br + 1,
+            (j = _uidnum(val["uid"]) + L_J_br + 1,
             j_pr=get_j_pr(val["uid"], L_J_pr, L_J_cs, producers_first),
             j_prcs=get_j_prcs(val["uid"], L_J_pr, L_J_cs, producers_first),
             t = t,
             t_prime = t_prime,
-            p_sdpc = p_sdpc[parse(Int, match(r"\d+", val["uid"]).match)+1, t, t_prime],
+            p_sdpc = p_sdpc[_uidnum(val["uid"])+1, t, t_prime],
             u_sd = uc["sd_status"][t_prime]
             )
         for (key, val) in data.sdd_lookup
         if is_pr(val["uid"], L_J_pr, L_J_cs, producers_first)
         for t in periods
         for t_prime in periods
-        if t_prime <= t && p_sdpc[parse(Int, match(r"\d+", val["uid"]).match)+1, t, t_prime] > 0
+        if t_prime <= t && p_sdpc[_uidnum(val["uid"])+1, t, t_prime] > 0
         for uc in uc_data["time_series_output"]["simple_dispatchable_device"]
         if val["uid"] == uc["uid"]
         ]
@@ -184,19 +185,19 @@ function parse_sc_data(data, uc_data, data_json)
     end
 
     T_sdpc_cs = [
-            (j = parse(Int, match(r"\d+", val["uid"]).match) + L_J_br + 1,
+            (j = _uidnum(val["uid"]) + L_J_br + 1,
             j_cs=get_j_cs(val["uid"], L_J_pr, L_J_cs, producers_first),
             j_prcs=get_j_prcs(val["uid"], L_J_pr, L_J_cs, producers_first),
             t = t,
             t_prime = t_prime,
-            p_sdpc = p_sdpc[parse(Int, match(r"\d+", val["uid"]).match)+1, t, t_prime],
+            p_sdpc = p_sdpc[_uidnum(val["uid"])+1, t, t_prime],
             u_sd = uc["sd_status"][t_prime]
             )
         for (key, val) in data.sdd_lookup
         if !is_pr(val["uid"], L_J_pr, L_J_cs, producers_first)
         for t in periods
         for t_prime in periods
-        if t_prime <= t && p_sdpc[parse(Int, match(r"\d+", val["uid"]).match)+1, t, t_prime] > 0
+        if t_prime <= t && p_sdpc[_uidnum(val["uid"])+1, t, t_prime] > 0
         for uc in uc_data["time_series_output"]["simple_dispatchable_device"]
         if val["uid"] == uc["uid"]
         ]
@@ -453,19 +454,19 @@ function parse_sc_data(data, uc_data, data_json)
 
     )
 
-    lengths = (L_J_xf, L_J_ln, L_J_ac, L_J_dc, L_J_br, L_J_cs,
-    L_J_pr, L_J_cspr, L_J_sh, I, L_T, L_N_p, L_N_q, L_W_en_min_pr, L_W_en_min_cs, L_W_en_max_pr, L_W_en_max_cs, K)
+    # Append the model-owned energy-window lengths and contingency count to
+    # PowerIO's static lengths, preserving the field order downstream reads.
+    lengths = merge(lengths, (; L_W_en_min_pr, L_W_en_min_cs, L_W_en_max_pr, L_W_en_max_cs, K))
 
     return sc_time_data, lengths, producers_first
 end
 
 function save_go3_solution(uc_filename, solution_name, result, vars, lengths, producers_first)
     uc_data = JSON.parsefile(uc_filename)
-    (L_J_xf, L_J_ln, L_J_ac, L_J_dc, L_J_br, L_J_cs,
-    L_J_pr, L_J_cspr, L_J_sh, I, L_T, L_N_p, L_N_q, L_W_en_min_pr, L_W_en_min_cs, L_W_en_max_pr, L_W_en_max_cs, K) = lengths
+    (; L_J_pr, L_J_cs, L_T) = lengths
     #Update simple dispatchable devices
     for line in uc_data["time_series_output"]["simple_dispatchable_device"]
-        raw_uid = parse(Int, match(r"\d+", line["uid"]).match)
+        raw_uid = _uidnum(line["uid"])
         solution_index = raw_uid + 1 #This corresponds to j_prcs
         if !is_pr(raw_uid, L_J_pr, L_J_cs, producers_first)
             #This section corresponds to consuming devices
@@ -505,7 +506,7 @@ function save_go3_solution(uc_filename, solution_name, result, vars, lengths, pr
     end
     #Update two winding transformers
     for line in uc_data["time_series_output"]["two_winding_transformer"]
-        solution_index = parse(Int, match(r"\d+", line["uid"]).match) + 1 #This corresponds to j_xf
+        solution_index = _uidnum(line["uid"]) + 1 #This corresponds to j_xf
         line["tm"] = Array(solution(result, vars.τ_jt_xf))[solution_index,:]
         line["ta"] = Array(solution(result, vars.φ_jt_xf))[solution_index,:] 
     end
@@ -513,7 +514,7 @@ function save_go3_solution(uc_filename, solution_name, result, vars, lengths, pr
 
     #Update DC lines
     for line in uc_data["time_series_output"]["dc_line"]
-        solution_index = parse(Int, match(r"\d+", line["uid"]).match) + 1 #This corresponds to j_dc
+        solution_index = _uidnum(line["uid"]) + 1 #This corresponds to j_dc
         line["qdc_fr"] = Array(solution(result, vars.q_jt_fr_dc))[solution_index,:]
         line["pdc_fr"] = Array(solution(result, vars.p_jt_fr_dc))[solution_index,:] #pdc_to is implied from energy conservation
         line["qdc_to"] = Array(solution(result, vars.q_jt_to_dc))[solution_index,:]
@@ -521,7 +522,7 @@ function save_go3_solution(uc_filename, solution_name, result, vars, lengths, pr
 
     #Update buses
     for line in uc_data["time_series_output"]["bus"]
-        solution_index = parse(Int, match(r"\d+", line["uid"]).match) + 1 #This corresponds to i
+        solution_index = _uidnum(line["uid"]) + 1 #This corresponds to i
         line["vm"] = Array(solution(result, vars.v_it))[solution_index,:]
         line["va"] = Array(solution(result, vars.θ_it))[solution_index,:]
     end
