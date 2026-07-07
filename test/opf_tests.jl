@@ -1,3 +1,6 @@
+import JSON
+import PowerIO
+
 # On a CUDA backend, MadNLP's defaults (SparseKKTSystem + MUMPS) are CPU-only and cannot
 # assemble the KKT matrix from device arrays, so solve the condensed system with cuDSS on
 # the GPU. On the CPU, pin the linear solver to Umfpack: MadNLP 0.10 changed the sparse
@@ -82,7 +85,91 @@ function sc_tests(filename, backend, T)
     uc_filename = filename*"_solution.json"
     filename = filename*".json"
     model, cons, vars, lengths, sc_data_array = ExaModelsPower.goc3_model(filename, uc_filename; backend=backend, T=T)
+    test_goc3_parser_boundary(sc_data_array, lengths)
+    backend === nothing && test_goc3_reactive_capability_rows(filename, uc_filename)
     result = exasolve(model, backend; max_iter=1, tol=1e-2)
+end
+
+function test_goc3_parser_boundary(sc_data, lengths)
+    L_J_ln = lengths[2]
+    L_J_ac = lengths[3]
+    L_N_p = lengths[12]
+
+    @test all(r -> r.j == r.j_ac && r.j_ac == r.j_ln, sc_data.aclbrancharray)
+    @test all(r -> r.j == r.j_ac && r.j_ac == r.j_xf + L_J_ln, sc_data.acxbrancharray)
+    @test all(r -> r.j == r.j_ac && r.j_ac == r.j_xf + L_J_ln, sc_data.fpdarray)
+    @test all(r -> r.j == r.j_ac && r.j_ac == r.j_xf + L_J_ln, sc_data.fwrarray)
+    @test all(r -> r.j == r.j_ac && r.j_ac == r.j_xf + L_J_ln, sc_data.vpdarray)
+    @test all(r -> r.j == r.j_ac && r.j_ac == r.j_xf + L_J_ln, sc_data.vwrarray)
+    @test all(r -> r.j == r.j_ac && r.j_ac == r.j_ln, sc_data.jtk_ln_flattened)
+    @test all(r -> r.j == r.j_ac && r.j_ac == r.j_xf + L_J_ln, sc_data.jtk_xf_flattened)
+    @test all(r -> r.j == r.j_dc + L_J_ac, sc_data.dclinearray)
+    @test all(r -> r.j == r.j_dc + L_J_ac, sc_data.jtk_dc_flattened)
+
+    @test all(r -> r.n == r.n_p, sc_data.preservearray)
+    @test all(r -> r.n == r.n_p, sc_data.preservesetarray_pr)
+    @test all(r -> r.n == r.n_p, sc_data.preservesetarray_cs)
+    @test all(r -> r.n == r.n_q + L_N_p, sc_data.qreservearray)
+    @test all(r -> r.n == r.n_q + L_N_p, sc_data.qreservesetarray_pr)
+    @test all(r -> r.n == r.n_q + L_N_p, sc_data.qreservesetarray_cs)
+
+    if !isempty(sc_data.aclbrancharray)
+        @test propertynames(first(sc_data.aclbrancharray))[1:3] == (:j, :j_ac, :j_ln)
+    end
+    if !isempty(sc_data.acxbrancharray)
+        @test propertynames(first(sc_data.acxbrancharray))[1:3] == (:j, :j_ac, :j_xf)
+    end
+    if !isempty(sc_data.jtk_xf_flattened)
+        @test propertynames(first(sc_data.jtk_xf_flattened))[1:5] == (:flat_jtk_xf, :ctg, :j, :j_ac, :j_xf)
+    end
+end
+
+function set_q_bound_cap!(dev, beta_ub, beta_lb, q_0_ub, q_0_lb)
+    dev["q_bound_cap"] = 1
+    dev["q_linear_cap"] = 0
+    dev["beta_ub"] = beta_ub
+    dev["beta_lb"] = beta_lb
+    dev["q_0_ub"] = q_0_ub
+    dev["q_0_lb"] = q_0_lb
+    return dev
+end
+
+function set_q_linear_cap!(dev, beta, q_0)
+    dev["q_bound_cap"] = 0
+    dev["q_linear_cap"] = 1
+    dev["beta"] = beta
+    dev["q_0"] = q_0
+    return dev
+end
+
+function test_goc3_reactive_capability_rows(filename, uc_filename)
+    data_json = JSON.parsefile(filename)
+    devices = data_json["network"]["simple_dispatchable_device"]
+    producers = [dev for dev in devices if dev["device_type"] == "producer"]
+    consumers = [dev for dev in devices if dev["device_type"] == "consumer"]
+
+    set_q_bound_cap!(producers[1], 0.31, -0.17, 0.41, -0.29)
+    set_q_linear_cap!(producers[2], 0.13, 0.07)
+    set_q_bound_cap!(consumers[1], 0.23, -0.19, 0.37, -0.31)
+    set_q_linear_cap!(consumers[2], 0.11, 0.05)
+
+    data = PowerIO.parse_goc3_json(data_json)
+    uc_data = JSON.parsefile(uc_filename)
+    sc_data, lengths, _ = ExaModelsPower.parse_sc_data(data, uc_data, data_json)
+    L_T = lengths[11]
+
+    @test length(sc_data.prarray_pqbounds) == L_T
+    @test length(sc_data.prarray_pqe) == L_T
+    @test length(sc_data.csarray_pqbounds) == L_T
+    @test length(sc_data.csarray_pqe) == L_T
+    @test isconcretetype(eltype(sc_data.prarray_pqbounds))
+    @test isconcretetype(eltype(sc_data.prarray_pqe))
+    @test isconcretetype(eltype(sc_data.csarray_pqbounds))
+    @test isconcretetype(eltype(sc_data.csarray_pqe))
+    @test propertynames(first(sc_data.prarray_pqbounds))[1:3] == (:j, :jprcs, :j_pr)
+    @test propertynames(first(sc_data.prarray_pqe))[1:3] == (:j, :jprcs, :j_pr)
+    @test propertynames(first(sc_data.csarray_pqbounds))[1:3] == (:j, :jprcs, :j_cs)
+    @test propertynames(first(sc_data.csarray_pqe))[1:3] == (:j, :jprcs, :j_cs)
 end
 
 function test_dcopf_case(result, result_pm, pg, pf)

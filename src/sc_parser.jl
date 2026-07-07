@@ -270,6 +270,10 @@ function parse_sc_data(data, uc_data, data_json)
     empty_fpd = Vector{NamedTuple{(:j, :j_ac, :j_xf, :phi_o, :t), Tuple{Int64, Int64, Int64, Float64, Int64}}}()
     empty_vwr = Vector{NamedTuple{(:j, :j_ac, :j_xf, :tau_min, :tau_max, :t), Tuple{Int64, Int64, Int64, Float64, Float64, Int64}}}()
     empty_fwr = Vector{NamedTuple{(:j, :j_ac, :j_xf, :tau_o, :t), Tuple{Int64, Int64, Int64, Float64, Int64}}}()
+    empty_pr_pqbounds = Vector{NamedTuple{(:j, :jprcs, :j_pr, :u_on, :sum2_T_supc_pr_jt, :sum2_T_sdpc_pr_jt, :beta_max, :beta_min, :q_max_p0, :q_min_p0, :t), Tuple{Int64, Int64, Int64, Int64, Int64, Int64, Float64, Float64, Float64, Float64, Int64}}}()
+    empty_pr_pqe = Vector{NamedTuple{(:j, :jprcs, :j_pr, :u_on, :sum2_T_supc_pr_jt, :sum2_T_sdpc_pr_jt, :beta, :q_p0, :t), Tuple{Int64, Int64, Int64, Int64, Int64, Int64, Float64, Float64, Int64}}}()
+    empty_cs_pqbounds = Vector{NamedTuple{(:j, :jprcs, :j_cs, :u_on, :sum2_T_supc_cs_jt, :sum2_T_sdpc_cs_jt, :beta_max, :beta_min, :q_max_p0, :q_min_p0, :t), Tuple{Int64, Int64, Int64, Int64, Int64, Int64, Float64, Float64, Float64, Float64, Int64}}}()
+    empty_cs_pqe = Vector{NamedTuple{(:j, :jprcs, :j_cs, :u_on, :sum2_T_supc_cs_jt, :sum2_T_sdpc_cs_jt, :beta, :q_p0, :t), Tuple{Int64, Int64, Int64, Int64, Int64, Int64, Float64, Float64, Int64}}}()
 
     sc_time_data = (
         ;
@@ -309,41 +313,39 @@ function parse_sc_data(data, uc_data, data_json)
         for uc in uc_data["time_series_output"]["simple_dispatchable_device"]
         if p.uid == uc["uid"]],
 
-        prarray_pqbounds = isempty(val for val in values(data.sdd_lookup) if is_pr(val["uid"], L_J_pr, L_J_cs, producers_first) && val["q_bound_cap"]==1) ? 
-                            empty_data = Vector{NamedTuple{(:j, :jprcs, :j_pr, :u_on, :sum2_T_supc_pr_jt, :sum2_T_sdpc_pr_jt, :beta_max, :beta_min, :q_max_p0, :q_min_p0, :t), Tuple{Int64, Int64, Int64, Int64, Int64, Int64, Float64, Float64, Float64, Float64, Int64}}}() : [
-                            (;j = parse(Int, match(r"\d+", val["uid"]).match) + L_J_br + 1,
-                            j_prcs=get_j_prcs(val["uid"], L_J_pr, L_J_cs, producers_first),
-                            j_pr=get_j_pr(val["uid"], L_J_pr, L_J_cs, producers_first),
+        prarray_pqbounds = any(p -> data.sdd_lookup[p.uid]["q_bound_cap"] == 1, sc_data.prod) ? NamedTuple{(:j, :jprcs, :j_pr, :u_on, :sum2_T_supc_pr_jt, :sum2_T_sdpc_pr_jt, :beta_max, :beta_min, :q_max_p0, :q_min_p0, :t), Tuple{Int64, Int64, Int64, Int64, Float64, Float64, Float64, Float64, Float64, Float64, Int64}}[
+                            (;j = p.j,
+                            jprcs=p.j_prcs,
+                            j_pr=p.j_pr,
                             u_on = uc["on_status"][t],
                             sum2_T_supc_pr_jt=sum2_T_supc_pr[p.j_pr, t], 
                             sum2_T_sdpc_pr_jt=sum2_T_sdpc_pr[p.j_pr, t], 
-                            beta_max = val["beta_ub"],
-                            beta_min = val["beta_lb"],
-                            q_max_p0 = val["q_0_ub"],
-                            q_min_p0 = val["q_0_lb"],
+                            beta_max = Float64(data.sdd_lookup[p.uid]["beta_ub"]),
+                            beta_min = Float64(data.sdd_lookup[p.uid]["beta_lb"]),
+                            q_max_p0 = Float64(data.sdd_lookup[p.uid]["q_0_ub"]),
+                            q_min_p0 = Float64(data.sdd_lookup[p.uid]["q_0_lb"]),
                             t=t
         )
-        for val in values(data.sdd_lookup), t in periods
-        if is_pr(val["uid"], L_J_pr, L_J_cs, producers_first) && val["q_bound_cap"]==1
+        for p in sc_data.prod, t in periods
+        if data.sdd_lookup[p.uid]["q_bound_cap"]==1
         for uc in uc_data["time_series_output"]["simple_dispatchable_device"]
-        if p.uid == uc["uid"]],
+        if p.uid == uc["uid"]] : empty_pr_pqbounds,
 
-        prarray_pqe = isempty(val for val in values(data.sdd_lookup) if is_pr(val["uid"], L_J_pr, L_J_cs, producers_first) && val["q_bound_cap"]==1) ? 
-                            empty_data = Vector{NamedTuple{(:j, :jprcs, :j_pr, :u_on, :sum2_T_supc_pr_jt, :sum2_T_sdpc_pr_jt, :beta, :q_p0, :t), Tuple{Int64, Int64, Int64, Int64, Int64, Int64, Float64, Float64, Int64}}}() : [
-                            (;j = parse(Int, match(r"\d+", val["uid"]).match) + L_J_br + 1,
-                            j_prcs=get_j_prcs(val["uid"], L_J_pr, L_J_cs, producers_first),
-                            j_pr=get_j_pr(val["uid"], L_J_pr, L_J_cs, producers_first),
+        prarray_pqe = any(p -> data.sdd_lookup[p.uid]["q_linear_cap"] == 1, sc_data.prod) ? NamedTuple{(:j, :jprcs, :j_pr, :u_on, :sum2_T_supc_pr_jt, :sum2_T_sdpc_pr_jt, :beta, :q_p0, :t), Tuple{Int64, Int64, Int64, Int64, Float64, Float64, Float64, Float64, Int64}}[
+                            (;j = p.j,
+                            jprcs=p.j_prcs,
+                            j_pr=p.j_pr,
                             u_on = uc["on_status"][t],
                             sum2_T_supc_pr_jt=sum2_T_supc_pr[p.j_pr, t], 
                             sum2_T_sdpc_pr_jt=sum2_T_sdpc_pr[p.j_pr, t], 
-                            beta = val["beta"],
-                            q_p0 = val["q_0"],
+                            beta = Float64(data.sdd_lookup[p.uid]["beta"]),
+                            q_p0 = Float64(data.sdd_lookup[p.uid]["q_0"]),
                             t=t
         )
-        for val in values(data.sdd_lookup), t in periods
-        if is_pr(val["uid"], L_J_pr, L_J_cs, producers_first) && val["q_linear_cap"]==1
+        for p in sc_data.prod, t in periods
+        if data.sdd_lookup[p.uid]["q_linear_cap"]==1
         for uc in uc_data["time_series_output"]["simple_dispatchable_device"]
-        if p.uid == uc["uid"]],
+        if p.uid == uc["uid"]] : empty_pr_pqe,
 
         k_csarray = [(;j_prcs=b.j_prcs, j_cs=b.j_cs, bus = b.bus, uid=b.uid, t=t, k=k) for b in sc_data.cons, t in periods, k in 1:length(data_json["reliability"]["contingency"])],
 
@@ -358,41 +360,39 @@ function parse_sc_data(data, uc_data, data_json)
         for uc in uc_data["time_series_output"]["simple_dispatchable_device"]
         if p.uid == uc["uid"]],
 
-        csarray_pqbounds = isempty(val for val in values(data.sdd_lookup) if !is_pr(val["uid"], L_J_pr, L_J_cs, producers_first) && val["q_bound_cap"]==1) ? 
-                            empty_data = Vector{NamedTuple{(:j, :jprcs, :j_cs, :u_on, :sum2_T_supc_cs_jt, :sum2_T_sdpc_cs_jt, :beta_max, :beta_min, :q_max_p0, :q_min_p0, :t), Tuple{Int64, Int64, Int64, Int64, Int64, Int64, Float64, Float64, Float64, Float64, Int64}}}() : [
-                            (;j = parse(Int, match(r"\d+", val["uid"]).match) + L_J_br + 1,
-                            j_cs=get_j_cs(val["uid"], L_J_pr, L_J_cs, producers_first),
-                            j_prcs=get_j_prcs(val["uid"], L_J_pr, L_J_cs, producers_first),
+        csarray_pqbounds = any(p -> data.sdd_lookup[p.uid]["q_bound_cap"] == 1, sc_data.cons) ? NamedTuple{(:j, :jprcs, :j_cs, :u_on, :sum2_T_supc_cs_jt, :sum2_T_sdpc_cs_jt, :beta_max, :beta_min, :q_max_p0, :q_min_p0, :t), Tuple{Int64, Int64, Int64, Int64, Float64, Float64, Float64, Float64, Float64, Float64, Int64}}[
+                            (;j = p.j,
+                            jprcs=p.j_prcs,
+                            j_cs=p.j_cs,
                             u_on = uc["on_status"][t],
                             sum2_T_supc_cs_jt=sum2_T_supc_cs[p.j_cs, t], 
                             sum2_T_sdpc_cs_jt=sum2_T_sdpc_cs[p.j_cs, t], 
-                            beta_max = val["beta_ub"],
-                            beta_min = val["beta_lb"],
-                            q_max_p0 = val["q_0_ub"],
-                            q_min_p0 = val["q_0_lb"],
+                            beta_max = Float64(data.sdd_lookup[p.uid]["beta_ub"]),
+                            beta_min = Float64(data.sdd_lookup[p.uid]["beta_lb"]),
+                            q_max_p0 = Float64(data.sdd_lookup[p.uid]["q_0_ub"]),
+                            q_min_p0 = Float64(data.sdd_lookup[p.uid]["q_0_lb"]),
                             t=t
         )
-        for val in values(data.sdd_lookup), t in periods
-        if !is_pr(val["uid"], L_J_pr, L_J_cs, producers_first) && val["q_bound_cap"]==1
+        for p in sc_data.cons, t in periods
+        if data.sdd_lookup[p.uid]["q_bound_cap"]==1
         for uc in uc_data["time_series_output"]["simple_dispatchable_device"]
-        if p.uid == uc["uid"]],
+        if p.uid == uc["uid"]] : empty_cs_pqbounds,
 
-        csarray_pqe = isempty(val for val in values(data.sdd_lookup) if !is_pr(val["uid"], L_J_pr, L_J_cs, producers_first) && val["q_bound_cap"]==1) ? 
-                            empty_data = Vector{NamedTuple{(:j, :jprcs, :j_cs, :u_on, :sum2_T_supc_cs_jt, :sum2_T_sdpc_cs_jt, :beta, :q_p0, :t), Tuple{Int64, Int64, Int64, Int64, Int64, Int64, Float64, Float64, Int64}}}() : [
-                            (;j = parse(Int, match(r"\d+", val["uid"]).match) + L_J_br + 1,
-                            j_cs=get_j_cs(val["uid"], L_J_pr, L_J_cs, producers_first),
-                            j_prcs=get_j_prcs(val["uid"], L_J_pr, L_J_cs, producers_first),
+        csarray_pqe = any(p -> data.sdd_lookup[p.uid]["q_linear_cap"] == 1, sc_data.cons) ? NamedTuple{(:j, :jprcs, :j_cs, :u_on, :sum2_T_supc_cs_jt, :sum2_T_sdpc_cs_jt, :beta, :q_p0, :t), Tuple{Int64, Int64, Int64, Int64, Float64, Float64, Float64, Float64, Int64}}[
+                            (;j = p.j,
+                            jprcs=p.j_prcs,
+                            j_cs=p.j_cs,
                             u_on = uc["on_status"][t],
                             sum2_T_supc_cs_jt=sum2_T_supc_cs[p.j_cs, t], 
                             sum2_T_sdpc_cs_jt=sum2_T_sdpc_cs[p.j_cs, t], 
-                            beta = val["beta"],
-                            q_p0 = val["q_0"],
+                            beta = Float64(data.sdd_lookup[p.uid]["beta"]),
+                            q_p0 = Float64(data.sdd_lookup[p.uid]["q_0"]),
                             t=t
         )
-        for val in values(data.sdd_lookup), t in periods
-        if !is_pr(val["uid"], L_J_pr, L_J_cs, producers_first) && val["q_linear_cap"]==1
+        for p in sc_data.cons, t in periods
+        if data.sdd_lookup[p.uid]["q_linear_cap"]==1
         for uc in uc_data["time_series_output"]["simple_dispatchable_device"]
-        if p.uid == uc["uid"]],
+        if p.uid == uc["uid"]] : empty_cs_pqe,
 
         acxbrancharray = [
             (;j=b.j, j_ac=b.j_ac, j_xf=b.j_xf, uid=b.uid, to_bus=b.to_bus, fr_bus=b.fr_bus, c_su=b.c_su, c_sd=b.c_sd, s_max=b.s_max, g_sr=b.g_sr, b_sr=b.b_sr, b_ch=b.b_ch,
