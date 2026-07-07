@@ -1,40 +1,29 @@
 function parse_mp_power_data(
     net,
-    N,
+    series,
     corrective_action_ratio,
     T = Float64,
 )
 
     data = PowerIO.parse_ac_power_data(net; T = T)
-
-    nbus = length(data.bus)
-
-    empty_stor = Vector{NamedTuple{(:c, :Einit, :etac, :etad, :Srating, :Zr, :Zim, :Pexts, :Qexts, :bus, :t), Tuple{Int64, Float32, Float32, Float32, Float32, Float32, Float32, Float32, Float32, Int64, Int64}}}()
+    N = PowerIO.n_periods(series)
 
     data = (
         ;
         data...,
-        refarray = [(i,t) for i in data.ref_buses, t in 1:N],
-        barray = [(;b, t = t) for b in data.branch, t in 1:N ],
-        busarray = [(;b, t = t) for b in data.bus, t in 1:N ],
-        arcarray = [(;a, t = t) for a in data.arc, t in 1:N ],
-        genarray = [(;g, t = t) for g in data.gen, t in 1:N ],
-        storarray = isempty(data.storage) ? empty_data =  empty_stor : [(;s, t = t) for s in data.storage, t in 1:N],
-        Δp = corrective_action_ratio .* (data.pmax .- data.pmin)
+        refarray = [(i, t) for i in data.ref_buses, t in 1:N],
+        barray = [(; b, t = t) for b in data.branch, t in 1:N],
+        # The per-period loads are baked onto each bus entry as it is built, so the
+        # busarray is constructed once rather than built and then mutated.
+        busarray = [(; b = merge(b, (; pd = series.pd[k, t], qd = series.qd[k, t])), t = t)
+                    for (k, b) in enumerate(data.bus), t in 1:N],
+        arcarray = [(; a, t = t) for a in data.arc, t in 1:N],
+        genarray = [(; g, t = t) for g in data.gen, t in 1:N],
+        storarray = [(; s, t = t) for s in data.storage, t in 1:N],
+        Δp = corrective_action_ratio .* (data.pmax .- data.pmin),
     )
 
     return data
-end
-
-#Write the per-period loads from a PowerIO.LoadSeries onto each (bus, period) entry
-function apply_load_series!(busarray, series)
-    for t in axes(busarray, 2), x in axes(busarray, 1)
-        row = busarray[x, t]
-        busarray[x, t] = (
-            b = merge(row.b, (; pd = series.pd[x, t], qd = series.qd[x, t])),
-            t = row.t,
-        )
-    end
 end
 
 #If no storage contraints, the "build_base_mpopf" returns the final version of the mpopf
@@ -386,8 +375,7 @@ function mpopf_model(
 
     @assert length(curve) > 0
     net = parse_mp_network(filename; from = from)
-    data = parse_mp_power_data(net, N, corrective_action_ratio, T)
-    apply_load_series!(data.busarray, PowerIO.LoadSeries(net, curve; T = T))
+    data = parse_mp_power_data(net, PowerIO.LoadSeries(net, curve; T = T), corrective_action_ratio, T)
     data = convert_data(data,backend)
     Nbus = size(data.bus, 1)
 
@@ -418,8 +406,7 @@ function mpopf_model(
         PowerIO.read_load_series(net, active_power_data, reactive_power_data; T = T) :
         PowerIO.LoadSeries(net, pd, qd; T = T)
     N = N === nothing ? PowerIO.n_periods(series) : N
-    data = parse_mp_power_data(net, N, corrective_action_ratio, T)
-    apply_load_series!(data.busarray, series)
+    data = parse_mp_power_data(net, series, corrective_action_ratio, T)
     data = convert_data(data,backend)
     Nbus = size(data.bus, 1)
 
@@ -445,8 +432,7 @@ function mpopf_model(
 
     @assert length(curve) > 0
     net = parse_mp_network(filename; from = from)
-    data = parse_mp_power_data(net, N, corrective_action_ratio, T)
-    apply_load_series!(data.busarray, PowerIO.LoadSeries(net, curve; T = T))
+    data = parse_mp_power_data(net, PowerIO.LoadSeries(net, curve; T = T), corrective_action_ratio, T)
     data = convert_data(data,backend)
     Nbus = size(data.bus, 1)
 
@@ -477,8 +463,7 @@ function mpopf_model(
         PowerIO.read_load_series(net, active_power_data, reactive_power_data; T = T) :
         PowerIO.LoadSeries(net, pd, qd; T = T)
     N = N === nothing ? PowerIO.n_periods(series) : N
-    data = parse_mp_power_data(net, N, corrective_action_ratio, T)
-    apply_load_series!(data.busarray, series)
+    data = parse_mp_power_data(net, series, corrective_action_ratio, T)
     data = convert_data(data,backend)
     Nbus = size(data.bus, 1)
 
