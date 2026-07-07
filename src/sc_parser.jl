@@ -270,10 +270,13 @@ function parse_sc_data(data, uc_data, data_json)
     empty_fpd = Vector{NamedTuple{(:j, :j_ac, :j_xf, :phi_o, :t), Tuple{Int64, Int64, Int64, Float64, Int64}}}()
     empty_vwr = Vector{NamedTuple{(:j, :j_ac, :j_xf, :tau_min, :tau_max, :t), Tuple{Int64, Int64, Int64, Float64, Float64, Int64}}}()
     empty_fwr = Vector{NamedTuple{(:j, :j_ac, :j_xf, :tau_o, :t), Tuple{Int64, Int64, Int64, Float64, Int64}}}()
-    empty_pr_pqbounds = Vector{NamedTuple{(:j, :jprcs, :j_pr, :u_on, :sum2_T_supc_pr_jt, :sum2_T_sdpc_pr_jt, :beta_max, :beta_min, :q_max_p0, :q_min_p0, :t), Tuple{Int64, Int64, Int64, Int64, Int64, Int64, Float64, Float64, Float64, Float64, Int64}}}()
-    empty_pr_pqe = Vector{NamedTuple{(:j, :jprcs, :j_pr, :u_on, :sum2_T_supc_pr_jt, :sum2_T_sdpc_pr_jt, :beta, :q_p0, :t), Tuple{Int64, Int64, Int64, Int64, Int64, Int64, Float64, Float64, Int64}}}()
-    empty_cs_pqbounds = Vector{NamedTuple{(:j, :jprcs, :j_cs, :u_on, :sum2_T_supc_cs_jt, :sum2_T_sdpc_cs_jt, :beta_max, :beta_min, :q_max_p0, :q_min_p0, :t), Tuple{Int64, Int64, Int64, Int64, Int64, Int64, Float64, Float64, Float64, Float64, Int64}}}()
-    empty_cs_pqe = Vector{NamedTuple{(:j, :jprcs, :j_cs, :u_on, :sum2_T_supc_cs_jt, :sum2_T_sdpc_cs_jt, :beta, :q_p0, :t), Tuple{Int64, Int64, Int64, Int64, Int64, Int64, Float64, Float64, Int64}}}()
+    # sum2_T_supc/sum2_T_sdpc are Float64 in the populated branches (see the
+    # zeros(...) sources and the prarray_pqbounds/pqe rows); the empty sentinels
+    # must match or the field eltype flips Int64/Float64 with device population.
+    empty_pr_pqbounds = Vector{NamedTuple{(:j, :jprcs, :j_pr, :u_on, :sum2_T_supc_pr_jt, :sum2_T_sdpc_pr_jt, :beta_max, :beta_min, :q_max_p0, :q_min_p0, :t), Tuple{Int64, Int64, Int64, Int64, Float64, Float64, Float64, Float64, Float64, Float64, Int64}}}()
+    empty_pr_pqe = Vector{NamedTuple{(:j, :jprcs, :j_pr, :u_on, :sum2_T_supc_pr_jt, :sum2_T_sdpc_pr_jt, :beta, :q_p0, :t), Tuple{Int64, Int64, Int64, Int64, Float64, Float64, Float64, Float64, Int64}}}()
+    empty_cs_pqbounds = Vector{NamedTuple{(:j, :jprcs, :j_cs, :u_on, :sum2_T_supc_cs_jt, :sum2_T_sdpc_cs_jt, :beta_max, :beta_min, :q_max_p0, :q_min_p0, :t), Tuple{Int64, Int64, Int64, Int64, Float64, Float64, Float64, Float64, Float64, Float64, Int64}}}()
+    empty_cs_pqe = Vector{NamedTuple{(:j, :jprcs, :j_cs, :u_on, :sum2_T_supc_cs_jt, :sum2_T_sdpc_cs_jt, :beta, :q_p0, :t), Tuple{Int64, Int64, Int64, Int64, Float64, Float64, Float64, Float64, Int64}}}()
 
     sc_time_data = (
         ;
@@ -408,10 +411,10 @@ function parse_sc_data(data, uc_data, data_json)
             for uc in uc_data["time_series_output"]["ac_line"]
             if b.uid == uc["uid"]],
 
-        fpdarray = isempty(sc_data.fpd) ? empty_data = empty_fpd : [(;b..., t=t) for b in sc_data.fpd, t in periods],
-        fwrarray = isempty(sc_data.fwr) ? empty_data = empty_fwr : [(;b..., t=t) for b in sc_data.fwr, t in periods],
-        vpdarray = isempty(sc_data.vpd) ? empty_data = empty_vpd : [(;b..., t=t) for b in sc_data.vpd, t in periods],
-        vwrarray = isempty(sc_data.vwr) ? empty_data = empty_vwr : [(;b..., t=t) for b in sc_data.vwr, t in periods],
+        fpdarray = isempty(sc_data.fpd) ? empty_fpd : [(;b..., t=t) for b in sc_data.fpd, t in periods],
+        fwrarray = isempty(sc_data.fwr) ? empty_fwr : [(;b..., t=t) for b in sc_data.fwr, t in periods],
+        vpdarray = isempty(sc_data.vpd) ? empty_vpd : [(;b..., t=t) for b in sc_data.vpd, t in periods],
+        vwrarray = isempty(sc_data.vwr) ? empty_vwr : [(;b..., t=t) for b in sc_data.vwr, t in periods],
         dclinearray = [(;b..., t=t) for b in sc_data.dc_branch, t in periods],
 
         p_jt_fr_dc_max = [dc.pdc_max for dc in sc_data.dc_branch, t in periods],

@@ -176,6 +176,7 @@ function add_mpopf_cons(core, data, N, Nbus, vars, cons, form)
 end
 
 function build_mpopf(data, Nbus, N, form, user_callback; backend = nothing, T = Float64, storage_complementarity_constraint = false, kwargs...)
+    @assert N == size(data.busarray, 2) "N ($N) must equal the number of load-series periods ($(size(data.busarray, 2)))"
     core = ExaCore(T; backend = backend)
 
     vars, cons = build_base_mpopf(core, data, N)
@@ -196,6 +197,7 @@ end
 
 #different constraints used when a function is added to remove complementarity and make charge/discharge curve smooth
 function build_mpopf(data, Nbus, N, discharge_func::Function, form, user_callback; backend = nothing, T = Float64, kwargs...)
+    @assert N == size(data.busarray, 2) "N ($N) must equal the number of load-series periods ($(size(data.busarray, 2)))"
     core = ExaCore(T; backend = backend)
 
     vars, cons = build_base_mpopf(core, data, N)

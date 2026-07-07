@@ -91,6 +91,10 @@ function sc_tests(filename, backend, T)
 end
 
 function test_goc3_parser_boundary(sc_data, lengths)
+    # lengths is the positional tuple assembled in src/sc_parser.jl (parse_sc_data).
+    # These indices track that order: 2 => L_J_ln, 3 => L_J_ac, 11 => L_T, 12 => L_N_p.
+    # If that tuple is reordered, update these (and the positional destructures in
+    # scopf.jl and sc_parser.jl that read the same tuple).
     L_J_ln = lengths[2]
     L_J_ac = lengths[3]
     L_N_p = lengths[12]

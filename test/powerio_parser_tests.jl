@@ -36,6 +36,16 @@ end
         _test_matches_exapowerio(actual, expected)
     end
 
+    # The multiperiod busarray is built immutably from the LoadSeries; its element
+    # type must stay concrete/isbits so the GPU kernels accept it (mirrors the
+    # SCOPF boundary test, and surfaces a PowerIO regression without a GPU runner).
+    let mp_net = ExaModelsPower.parse_mp_network(_case_path("pglib_opf_case3_lmbd.m"))
+        mp_series = PowerIO.LoadSeries(mp_net, [1.0, 0.95]; T = Float64)
+        mp_data = ExaModelsPower.parse_mp_power_data(mp_net, mp_series, 0.1, Float64)
+        @test isconcretetype(eltype(mp_data.busarray))
+        @test isbitstype(eltype(mp_data.busarray))
+    end
+
     mktempdir() do dir
         matpower = _case_path("pglib_opf_case3_lmbd.m")
         psse_path = joinpath(dir, "case3.raw")
