@@ -1,12 +1,55 @@
-# GO Challenge 3 static index-set construction lives in PowerIO (src/goc3.jl).
-# These local names bind the moved helpers so the security-constrained OPF code
-# below reads unchanged; the global-index numbering convention is documented there.
-const is_pr = PowerIO.goc3_is_pr
-const get_j_prcs = PowerIO.goc3_j_prcs
-const get_j_pr = PowerIO.goc3_j_pr
-const get_j_cs = PowerIO.goc3_j_cs
+# PowerIO (src/goc3.jl) returns the general GOC3 topology and time-series rows,
+# keyed by uid and per-class index. The stacked global variable numbering used
+# below (j, j_pr, j_cs, j_prcs, j_sh: offsets into one variable vector) is
+# specific to this optimization model, so it is defined and threaded on here.
+is_pr(uid::Int, L_J_pr::Int, L_J_cs::Int, producers_first::Bool)::Bool =
+    producers_first ? uid < L_J_pr : uid >= L_J_cs
+function is_pr(uid_str::String, L_J_pr::Int, L_J_cs::Int, producers_first::Bool)::Bool
+    is_pr(parse(Int, match(r"\d+", uid_str).match), L_J_pr, L_J_cs, producers_first)
+end
+
+get_j_prcs(uid_str::String, L_J_pr::Int, L_J_cs::Int, producers_first::Bool) =
+    parse(Int, match(r"\d+", uid_str).match) + 1
+
+function get_j_pr(uid_str::String, L_J_pr::Int, L_J_cs::Int, producers_first::Bool)
+    offset = Int64(producers_first ? 0 : (-L_J_cs))
+    parse(Int, match(r"\d+", uid_str).match) + 1 + offset
+end
+
+function get_j_cs(uid_str::String, L_J_pr::Int, L_J_cs::Int, producers_first::Bool)
+    offset = Int64(producers_first ? (-L_J_pr) : 0)
+    parse(Int, match(r"\d+", uid_str).match) + 1 + offset
+end
+
+_uidnum(s) = parse(Int, match(r"\d+", s).match)
+
 const goc3_bus_id = PowerIO.goc3_bus_id
 const get_as = PowerIO.goc3_interval_bounds
+
+# Shutdown power capability p_sdpc[j_prcs, t, t_prime]. Model-specific: it is
+# indexed in this model's stacked producer/consumer variable space.
+function goc3_shutdown_power_cap(data, lengths, producers_first)
+    L_J_cs = lengths.L_J_cs
+    L_J_pr = lengths.L_J_pr
+    L_J_cspr = lengths.L_J_cspr
+    L_T = lengths.L_T
+    periods = data.periods
+    dt = Float64.(data.dt)
+
+    p_sdpc = zeros(L_J_cspr, L_T, L_T)
+    for t in periods
+        for t_prime in periods
+            for (key, val) in data.sdd_lookup
+                if t_prime == 1 && t >= t_prime
+                    p_sdpc[get_j_prcs(val["uid"], L_J_pr, L_J_cs, producers_first), t, t_prime] = val["initial_status"]["p"] - val["p_shutdown_ramp_ub"]*(get_as(dt, t)[3] - get_as(dt, t_prime)[1])
+                elseif t >= t_prime
+                    p_sdpc[get_j_prcs(val["uid"], L_J_pr, L_J_cs, producers_first), t, t_prime] = data.sdd_ts_lookup[key]["p_lb"][t_prime-1] - val["p_shutdown_ramp_ub"]*(get_as(dt, t)[3] - get_as(dt, t_prime)[1])
+                end
+            end
+        end
+    end
+    return p_sdpc
+end
 
 function parse_sc_data(data, uc_data, data_json)
     producers_first = data.sdd_lookup[minimum(keys(data.sdd_lookup))]["device_type"] == "producer"
@@ -15,6 +58,31 @@ function parse_sc_data(data, uc_data, data_json)
     
     (L_J_xf, L_J_ln, L_J_ac, L_J_dc, L_J_br, L_J_cs,
     L_J_pr, L_J_cspr, L_J_sh, I, L_T, L_N_p, L_N_q) = lengths
+
+    # Thread this model's stacked global variable indices onto PowerIO's general
+    # rows, reproducing the numbering the model layer expects.
+    _j_pr(uid) = (j = _uidnum(uid) + L_J_br + 1, j_prcs = get_j_prcs(uid, L_J_pr, L_J_cs, producers_first), j_pr = get_j_pr(uid, L_J_pr, L_J_cs, producers_first))
+    _j_cs(uid) = (j = _uidnum(uid) + L_J_br + 1, j_prcs = get_j_prcs(uid, L_J_pr, L_J_cs, producers_first), j_cs = get_j_cs(uid, L_J_pr, L_J_cs, producers_first))
+    sc_data = (
+        bus = sc_data.bus,
+        shunt = [(j = _uidnum(s.uid) + L_J_br + L_J_cspr + 1, j_sh = _uidnum(s.uid) + 1, s...) for s in sc_data.shunt],
+        acl_branch = [(j = b.j_ac, b...) for b in sc_data.acl_branch],
+        acx_branch = [(j = b.j_ac, b...) for b in sc_data.acx_branch],
+        vpd = [(j = b.j_ac, b...) for b in sc_data.vpd],
+        fpd = [(j = b.j_ac, b...) for b in sc_data.fpd],
+        vwr = [(j = b.j_ac, b...) for b in sc_data.vwr],
+        fwr = [(j = b.j_ac, b...) for b in sc_data.fwr],
+        dc_branch = [(j = b.j_dc + L_J_ac, b...) for b in sc_data.dc_branch],
+        prod = [(j = _uidnum(p.uid) + L_J_br + 1, j_pr = get_j_pr(p.uid, L_J_pr, L_J_cs, producers_first), j_prcs = get_j_prcs(p.uid, L_J_pr, L_J_cs, producers_first), p...) for p in sc_data.prod],
+        cons = [(j = _uidnum(p.uid) + L_J_br + 1, j_cs = get_j_cs(p.uid, L_J_pr, L_J_cs, producers_first), j_prcs = get_j_prcs(p.uid, L_J_pr, L_J_cs, producers_first), p...) for p in sc_data.cons],
+        active_reserve = sc_data.active_reserve,
+        reactive_reserve = sc_data.reactive_reserve,
+        active_reserve_set_pr = [(i = r.i, j = _uidnum(r.uid) + L_J_br + 1, n = r.n, n_p = r.n_p, j_pr = get_j_pr(r.uid, L_J_pr, L_J_cs, producers_first), j_prcs = get_j_prcs(r.uid, L_J_pr, L_J_cs, producers_first)) for r in sc_data.active_reserve_set_pr],
+        active_reserve_set_cs = [(i = r.i, j = _uidnum(r.uid) + L_J_br + 1, n = r.n, n_p = r.n_p, j_cs = get_j_cs(r.uid, L_J_pr, L_J_cs, producers_first), j_prcs = get_j_prcs(r.uid, L_J_pr, L_J_cs, producers_first)) for r in sc_data.active_reserve_set_cs],
+        reactive_reserve_set_pr = [(i = r.i, j = _uidnum(r.uid) + L_J_br + 1, n = r.n, n_q = r.n_q, j_pr = get_j_pr(r.uid, L_J_pr, L_J_cs, producers_first), j_prcs = get_j_prcs(r.uid, L_J_pr, L_J_cs, producers_first)) for r in sc_data.reactive_reserve_set_pr],
+        reactive_reserve_set_cs = [(i = r.i, j = _uidnum(r.uid) + L_J_br + 1, n = r.n, n_q = r.n_q, j_cs = get_j_cs(r.uid, L_J_pr, L_J_cs, producers_first), j_prcs = get_j_prcs(r.uid, L_J_pr, L_J_cs, producers_first)) for r in sc_data.reactive_reserve_set_cs],
+    )
+
     periods = data.periods
     dt = Float64.(data.dt)
     K = length(data_json["reliability"]["contingency"])
@@ -78,7 +146,7 @@ function parse_sc_data(data, uc_data, data_json)
 
 
     # p_sdpc (shutdown power capability), indexed [j_prcs, t, t_prime]
-    p_sdpc = PowerIO.goc3_shutdown_power_cap(data, lengths, producers_first)
+    p_sdpc = goc3_shutdown_power_cap(data, lengths, producers_first)
 
     T_sdpc_pr = [
             (j = parse(Int, match(r"\d+", val["uid"]).match) + L_J_br + 1,
@@ -135,21 +203,23 @@ function parse_sc_data(data, uc_data, data_json)
     
 
     # Multi-interval energy requirement windows and their per-period membership.
-    ew = PowerIO.goc3_energy_windows(data, lengths, producers_first)
-    W_en_max_pr = ew.W_en_max_pr
-    W_en_max_cs = ew.W_en_max_cs
-    W_en_min_pr = ew.W_en_min_pr
-    W_en_min_cs = ew.W_en_min_cs
-    T_w_en_max_pr = ew.T_w_en_max_pr
-    T_w_en_max_cs = ew.T_w_en_max_cs
-    T_w_en_min_pr = ew.T_w_en_min_pr
-    T_w_en_min_cs = ew.T_w_en_min_cs
+    ew = PowerIO.goc3_energy_windows(data)
+    W_en_max_pr = [(w_en_max_pr_ind = r.w_en_max_pr_ind, _j_pr(r.uid)..., a_en_max_start = r.a_en_max_start, a_en_max_end = r.a_en_max_end, e_max = r.e_max) for r in ew.W_en_max_pr]
+    W_en_max_cs = [(w_en_max_cs_ind = r.w_en_max_cs_ind, _j_cs(r.uid)..., a_en_max_start = r.a_en_max_start, a_en_max_end = r.a_en_max_end, e_max = r.e_max) for r in ew.W_en_max_cs]
+    W_en_min_pr = [(w_en_min_pr_ind = r.w_en_min_pr_ind, _j_pr(r.uid)..., a_en_min_start = r.a_en_min_start, a_en_min_end = r.a_en_min_end, e_min = r.e_min) for r in ew.W_en_min_pr]
+    W_en_min_cs = [(w_en_min_cs_ind = r.w_en_min_cs_ind, _j_cs(r.uid)..., a_en_min_start = r.a_en_min_start, a_en_min_end = r.a_en_min_end, e_min = r.e_min) for r in ew.W_en_min_cs]
+    T_w_en_max_pr = [(w_en_max_pr_ind = r.w_en_max_pr_ind, _j_pr(r.uid)..., t = r.t, dt = r.dt) for r in ew.T_w_en_max_pr]
+    T_w_en_max_cs = [(w_en_max_cs_ind = r.w_en_max_cs_ind, _j_cs(r.uid)..., t = r.t, dt = r.dt) for r in ew.T_w_en_max_cs]
+    T_w_en_min_pr = [(w_en_min_pr_ind = r.w_en_min_pr_ind, _j_pr(r.uid)..., t = r.t, dt = r.dt) for r in ew.T_w_en_min_pr]
+    T_w_en_min_cs = [(w_en_min_cs_ind = r.w_en_min_cs_ind, _j_cs(r.uid)..., t = r.t, dt = r.dt) for r in ew.T_w_en_min_cs]
     L_W_en_max_pr = length(W_en_max_pr)
     L_W_en_max_cs = length(W_en_max_cs)
     L_W_en_min_pr = length(W_en_min_pr)
     L_W_en_min_cs = length(W_en_min_cs)
 
-    p_jtm_flattened_pr, p_jtm_flattened_cs = PowerIO.goc3_price_blocks(cost_vector_pr, cost_vector_cs)
+    pb_pr, pb_cs = PowerIO.goc3_price_blocks(cost_vector_pr, cost_vector_cs)
+    p_jtm_flattened_pr = [(flat_k = r.flat_k, _j_pr(r.uid)..., t = r.t, m = r.m, c_en = r.c_en, p_max = r.p_max) for r in pb_pr]
+    p_jtm_flattened_cs = [(flat_k = r.flat_k, _j_cs(r.uid)..., t = r.t, m = r.m, c_en = r.c_en, p_max = r.p_max) for r in pb_cs]
 
     # Post-contingency surviving AC branches. PowerIO enumerates the pure survivor
     # rows per contingency; here we attach the UC on_status and expand over
@@ -165,7 +235,7 @@ function parse_sc_data(data, uc_data, data_json)
             for r in rows
                 haskey(uc_ln_lookup, r.uid) || continue
                 uc = uc_ln_lookup[r.uid]
-                push!(jtk_ln_flattened, (flat_jtk_ln=flat_jtk_ln, ctg=r.ctg, j=r.j, j_ac=r.j_ac, j_ln=r.j_ln,
+                push!(jtk_ln_flattened, (flat_jtk_ln=flat_jtk_ln, ctg=r.ctg, j=r.j_ac, j_ac=r.j_ac, j_ln=r.j_ln,
                 to_bus=r.to_bus, fr_bus=r.fr_bus, b_sr=r.b_sr, s_max_ctg=r.s_max_ctg, u_on=uc["on_status"][t], t=t, dt=dt[t]))
                 flat_jtk_ln += 1
             end
@@ -179,14 +249,14 @@ function parse_sc_data(data, uc_data, data_json)
             for r in rows
                 haskey(uc_xf_lookup, r.uid) || continue
                 uc = uc_xf_lookup[r.uid]
-                push!(jtk_xf_flattened, (flat_jtk_xf=flat_jtk_xf, ctg=r.ctg, j=r.j, j_ac=r.j_ac, j_xf=r.j_xf,
+                push!(jtk_xf_flattened, (flat_jtk_xf=flat_jtk_xf, ctg=r.ctg, j=r.j_ac, j_ac=r.j_ac, j_xf=r.j_xf,
                 to_bus=r.to_bus, fr_bus=r.fr_bus, b_sr=r.b_sr, s_max_ctg=r.s_max_ctg, u_on=uc["on_status"][t], t=t, dt=dt[t]))
                 flat_jtk_xf += 1
             end
         end
     end
 
-    jtk_dc_flattened = PowerIO.goc3_dc_contingency_flows(data, lengths)
+    jtk_dc_flattened = [(flat_jtk_dc = r.flat_jtk_dc, ctg = r.ctg, j = r.j_dc + L_J_ac, j_dc = r.j_dc, to_bus = r.to_bus, fr_bus = r.fr_bus, t = r.t, dt = r.dt) for r in PowerIO.goc3_dc_contingency_flows(data)]
 
     empty_vpd = Vector{NamedTuple{(:j, :j_ac, :j_xf, :phi_min, :phi_max, :t), Tuple{Int64, Int64, Int64, Float64, Float64, Int64}}}()
     empty_fpd = Vector{NamedTuple{(:j, :j_ac, :j_xf, :phi_o, :t), Tuple{Int64, Int64, Int64, Float64, Int64}}}()
