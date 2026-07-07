@@ -76,10 +76,10 @@ function parse_sc_data(data, uc_data, data_json)
         shunt = [(j = _uidnum(s.uid) + L_J_br + L_J_cspr + 1, j_sh = _uidnum(s.uid) + 1, s...) for s in sc_data.shunt],
         acl_branch = [(j = b.j_ln, j_ac = b.j_ln, b...) for b in sc_data.acl_branch],
         acx_branch = [(j = b.j_xf + L_J_ln, j_ac = b.j_xf + L_J_ln, b...) for b in sc_data.acx_branch],
-        vpd = [(j = b.j_ac, b...) for b in sc_data.vpd],
-        fpd = [(j = b.j_ac, b...) for b in sc_data.fpd],
-        vwr = [(j = b.j_ac, b...) for b in sc_data.vwr],
-        fwr = [(j = b.j_ac, b...) for b in sc_data.fwr],
+        vpd = [(j = b.j_xf + L_J_ln, j_ac = b.j_xf + L_J_ln, b...) for b in sc_data.vpd],
+        fpd = [(j = b.j_xf + L_J_ln, j_ac = b.j_xf + L_J_ln, b...) for b in sc_data.fpd],
+        vwr = [(j = b.j_xf + L_J_ln, j_ac = b.j_xf + L_J_ln, b...) for b in sc_data.vwr],
+        fwr = [(j = b.j_xf + L_J_ln, j_ac = b.j_xf + L_J_ln, b...) for b in sc_data.fwr],
         dc_branch = [(j = b.j_dc + L_J_ac, b...) for b in sc_data.dc_branch],
         prod = [(j = _uidnum(p.uid) + L_J_br + 1, j_pr = get_j_pr(p.uid, L_J_pr, L_J_cs, producers_first), j_prcs = get_j_prcs(p.uid, L_J_pr, L_J_cs, producers_first), p...) for p in sc_data.prod],
         cons = [(j = _uidnum(p.uid) + L_J_br + 1, j_cs = get_j_cs(p.uid, L_J_pr, L_J_cs, producers_first), j_prcs = get_j_prcs(p.uid, L_J_pr, L_J_cs, producers_first), p...) for p in sc_data.cons],
@@ -243,7 +243,7 @@ function parse_sc_data(data, uc_data, data_json)
             for r in rows
                 haskey(uc_ln_lookup, r.uid) || continue
                 uc = uc_ln_lookup[r.uid]
-                push!(jtk_ln_flattened, (flat_jtk_ln=flat_jtk_ln, ctg=r.ctg, j=r.j_ac, j_ac=r.j_ac, j_ln=r.j_ln,
+                push!(jtk_ln_flattened, (flat_jtk_ln=flat_jtk_ln, ctg=r.ctg, j=r.j_ln, j_ac=r.j_ln, j_ln=r.j_ln,
                 to_bus=r.to_bus, fr_bus=r.fr_bus, b_sr=r.b_sr, s_max_ctg=r.s_max_ctg, u_on=uc["on_status"][t], t=t, dt=dt[t]))
                 flat_jtk_ln += 1
             end
@@ -257,7 +257,7 @@ function parse_sc_data(data, uc_data, data_json)
             for r in rows
                 haskey(uc_xf_lookup, r.uid) || continue
                 uc = uc_xf_lookup[r.uid]
-                push!(jtk_xf_flattened, (flat_jtk_xf=flat_jtk_xf, ctg=r.ctg, j=r.j_ac, j_ac=r.j_ac, j_xf=r.j_xf,
+                push!(jtk_xf_flattened, (flat_jtk_xf=flat_jtk_xf, ctg=r.ctg, j=r.j_xf + L_J_ln, j_ac=r.j_xf + L_J_ln, j_xf=r.j_xf,
                 to_bus=r.to_bus, fr_bus=r.fr_bus, b_sr=r.b_sr, s_max_ctg=r.s_max_ctg, u_on=uc["on_status"][t], t=t, dt=dt[t]))
                 flat_jtk_xf += 1
             end
@@ -527,4 +527,3 @@ function save_go3_solution(uc_filename, solution_name, result, vars, lengths, pr
         JSON.print(io, uc_data, 4)
     end
 end
-
