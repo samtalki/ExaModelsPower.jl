@@ -61,7 +61,11 @@ end
 
 function parse_sc_data(data, uc_data, data_json)
     producers_first = data.sdd_lookup[minimum(keys(data.sdd_lookup))]["device_type"] == "producer"
-    sc_data, lengths, cost_vector_pr, cost_vector_cs = PowerIO.goc3_static_data(data)
+    # One call to PowerIO returns the full set of format-neutral GOC3 SCOPF index
+    # sets; this function threads on the model's stacked variable numbering below.
+    scd = PowerIO.goc3_scopf_data(data)
+    sc_data = scd.static
+    lengths = scd.lengths
 
     # `lengths` is PowerIO's NamedTuple of static index-set sizes. Bind the names
     # this function uses by name; the four energy-window lengths and K are computed
@@ -212,7 +216,7 @@ function parse_sc_data(data, uc_data, data_json)
     
 
     # Multi-interval energy requirement windows and their per-period membership.
-    ew = PowerIO.goc3_energy_windows(data)
+    ew = scd.energy_windows
     W_en_max_pr = [(w_en_max_pr_ind = r.w_en_max_pr_ind, _j_pr(r.uid)..., a_en_max_start = r.a_en_max_start, a_en_max_end = r.a_en_max_end, e_max = r.e_max) for r in ew.W_en_max_pr]
     W_en_max_cs = [(w_en_max_cs_ind = r.w_en_max_cs_ind, _j_cs(r.uid)..., a_en_max_start = r.a_en_max_start, a_en_max_end = r.a_en_max_end, e_max = r.e_max) for r in ew.W_en_max_cs]
     W_en_min_pr = [(w_en_min_pr_ind = r.w_en_min_pr_ind, _j_pr(r.uid)..., a_en_min_start = r.a_en_min_start, a_en_min_end = r.a_en_min_end, e_min = r.e_min) for r in ew.W_en_min_pr]
@@ -226,14 +230,15 @@ function parse_sc_data(data, uc_data, data_json)
     L_W_en_min_pr = length(W_en_min_pr)
     L_W_en_min_cs = length(W_en_min_cs)
 
-    pb_pr, pb_cs = PowerIO.goc3_price_blocks(cost_vector_pr, cost_vector_cs)
+    pb_pr = scd.price_blocks.producer
+    pb_cs = scd.price_blocks.consumer
     p_jtm_flattened_pr = [(flat_k = r.flat_k, _j_pr(r.uid)..., t = r.t, m = r.m, c_en = r.c_en, p_max = r.p_max) for r in pb_pr]
     p_jtm_flattened_cs = [(flat_k = r.flat_k, _j_cs(r.uid)..., t = r.t, m = r.m, c_en = r.c_en, p_max = r.p_max) for r in pb_cs]
 
     # Post-contingency surviving AC branches. PowerIO enumerates the pure survivor
     # rows per contingency; here we attach the UC on_status and expand over
     # periods, preserving the (ctg, t, component, branch) flat ordering.
-    ctg_ac_survivors = PowerIO.goc3_ac_contingency_survivors(data, lengths)
+    ctg_ac_survivors = scd.ac_contingency_survivors
     uc_ln_lookup = Dict(uc["uid"] => uc for uc in uc_data["time_series_output"]["ac_line"])
     uc_xf_lookup = Dict(uc["uid"] => uc for uc in uc_data["time_series_output"]["two_winding_transformer"])
 
@@ -265,7 +270,7 @@ function parse_sc_data(data, uc_data, data_json)
         end
     end
 
-    jtk_dc_flattened = [(flat_jtk_dc = r.flat_jtk_dc, ctg = r.ctg, j = r.j_dc + L_J_ac, j_dc = r.j_dc, to_bus = r.to_bus, fr_bus = r.fr_bus, t = r.t, dt = r.dt) for r in PowerIO.goc3_dc_contingency_flows(data)]
+    jtk_dc_flattened = [(flat_jtk_dc = r.flat_jtk_dc, ctg = r.ctg, j = r.j_dc + L_J_ac, j_dc = r.j_dc, to_bus = r.to_bus, fr_bus = r.fr_bus, t = r.t, dt = r.dt) for r in scd.dc_contingency_flows]
 
     empty_vpd = Vector{NamedTuple{(:j, :j_ac, :j_xf, :phi_min, :phi_max, :t), Tuple{Int64, Int64, Int64, Float64, Float64, Int64}}}()
     empty_fpd = Vector{NamedTuple{(:j, :j_ac, :j_xf, :phi_o, :t), Tuple{Int64, Int64, Int64, Float64, Int64}}}()
