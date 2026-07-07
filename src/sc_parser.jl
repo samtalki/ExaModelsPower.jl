@@ -85,10 +85,10 @@ function parse_sc_data(data, uc_data, data_json)
         cons = [(j = _uidnum(p.uid) + L_J_br + 1, j_cs = get_j_cs(p.uid, L_J_pr, L_J_cs, producers_first), j_prcs = get_j_prcs(p.uid, L_J_pr, L_J_cs, producers_first), p...) for p in sc_data.cons],
         active_reserve = [(n = r.n_p, r...) for r in sc_data.active_reserve],
         reactive_reserve = [(n = r.n_q + L_N_p, r...) for r in sc_data.reactive_reserve],
-        active_reserve_set_pr = [(i = r.i, j = _uidnum(r.uid) + L_J_br + 1, n = r.n, n_p = r.n_p, j_pr = get_j_pr(r.uid, L_J_pr, L_J_cs, producers_first), j_prcs = get_j_prcs(r.uid, L_J_pr, L_J_cs, producers_first)) for r in sc_data.active_reserve_set_pr],
-        active_reserve_set_cs = [(i = r.i, j = _uidnum(r.uid) + L_J_br + 1, n = r.n, n_p = r.n_p, j_cs = get_j_cs(r.uid, L_J_pr, L_J_cs, producers_first), j_prcs = get_j_prcs(r.uid, L_J_pr, L_J_cs, producers_first)) for r in sc_data.active_reserve_set_cs],
-        reactive_reserve_set_pr = [(i = r.i, j = _uidnum(r.uid) + L_J_br + 1, n = r.n, n_q = r.n_q, j_pr = get_j_pr(r.uid, L_J_pr, L_J_cs, producers_first), j_prcs = get_j_prcs(r.uid, L_J_pr, L_J_cs, producers_first)) for r in sc_data.reactive_reserve_set_pr],
-        reactive_reserve_set_cs = [(i = r.i, j = _uidnum(r.uid) + L_J_br + 1, n = r.n, n_q = r.n_q, j_cs = get_j_cs(r.uid, L_J_pr, L_J_cs, producers_first), j_prcs = get_j_prcs(r.uid, L_J_pr, L_J_cs, producers_first)) for r in sc_data.reactive_reserve_set_cs],
+        active_reserve_set_pr = [(i = r.i, j = _uidnum(r.uid) + L_J_br + 1, n = r.n_p, n_p = r.n_p, j_pr = get_j_pr(r.uid, L_J_pr, L_J_cs, producers_first), j_prcs = get_j_prcs(r.uid, L_J_pr, L_J_cs, producers_first)) for r in sc_data.active_reserve_set_pr],
+        active_reserve_set_cs = [(i = r.i, j = _uidnum(r.uid) + L_J_br + 1, n = r.n_p, n_p = r.n_p, j_cs = get_j_cs(r.uid, L_J_pr, L_J_cs, producers_first), j_prcs = get_j_prcs(r.uid, L_J_pr, L_J_cs, producers_first)) for r in sc_data.active_reserve_set_cs],
+        reactive_reserve_set_pr = [(i = r.i, j = _uidnum(r.uid) + L_J_br + 1, n = r.n_q + L_N_p, n_q = r.n_q, j_pr = get_j_pr(r.uid, L_J_pr, L_J_cs, producers_first), j_prcs = get_j_prcs(r.uid, L_J_pr, L_J_cs, producers_first)) for r in sc_data.reactive_reserve_set_pr],
+        reactive_reserve_set_cs = [(i = r.i, j = _uidnum(r.uid) + L_J_br + 1, n = r.n_q + L_N_p, n_q = r.n_q, j_cs = get_j_cs(r.uid, L_J_pr, L_J_cs, producers_first), j_prcs = get_j_prcs(r.uid, L_J_pr, L_J_cs, producers_first)) for r in sc_data.reactive_reserve_set_cs],
     )
 
     periods = data.periods
