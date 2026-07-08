@@ -1,64 +1,29 @@
 function parse_mp_power_data(
-    filename,
-    N,
+    net,
+    series,
     corrective_action_ratio,
-    T = Float64;
-    from = nothing,
+    T = Float64,
 )
 
-    data = parse_ac_power_data(filename, T; from = from)
-
-    nbus = length(data.bus)
-
-    empty_stor = Vector{NamedTuple{(:c, :Einit, :etac, :etad, :Srating, :Zr, :Zim, :Pexts, :Qexts, :bus, :t), Tuple{Int64, Float32, Float32, Float32, Float32, Float32, Float32, Float32, Float32, Int64, Int64}}}()
+    data = PowerIO.parse_ac_power_data(net; T = T)
+    N = PowerIO.n_periods(series)
 
     data = (
         ;
         data...,
-        refarray = [(i,t) for i in data.ref_buses, t in 1:N],
-        barray = [(;b, t = t) for b in data.branch, t in 1:N ],
-        busarray = [(;b, t = t) for b in data.bus, t in 1:N ],
-        arcarray = [(;a, t = t) for a in data.arc, t in 1:N ],
-        genarray = [(;g, t = t) for g in data.gen, t in 1:N ],
-        storarray = isempty(data.storage) ? empty_data =  empty_stor : [(;s, t = t) for s in data.storage, t in 1:N],
-        Δp = corrective_action_ratio .* (data.pmax .- data.pmin)
+        refarray = [(i, t) for i in data.ref_buses, t in 1:N],
+        barray = [(; b, t = t) for b in data.branch, t in 1:N],
+        # The per-period loads are baked onto each bus entry as it is built, so the
+        # busarray is constructed once rather than built and then mutated.
+        busarray = [(; b = merge(b, (; pd = series.pd[k, t], qd = series.qd[k, t])), t = t)
+                    for (k, b) in enumerate(data.bus), t in 1:N],
+        arcarray = [(; a, t = t) for a in data.arc, t in 1:N],
+        genarray = [(; g, t = t) for g in data.gen, t in 1:N],
+        storarray = [(; s, t = t) for s in data.storage, t in 1:N],
+        Δp = corrective_action_ratio .* (data.pmax .- data.pmin),
     )
 
     return data
-end
-
-function update_load_data(busarray, curve)
-
-    for t in eachindex(curve)
-        for x in 1:size(busarray, 1)
-            row = busarray[x, t]
-            b = row.b
-            busarray[x, t] = (
-                b = merge(b, (;
-                    pd = b.pd * curve[t],
-                    qd = b.qd * curve[t],
-                    gs = b.gs * curve[t],
-                    bs = b.bs * curve[t],
-                )),
-                t = row.t,
-            )
-        end
-    end
-end
-
-#Pd, Qd as input
-function update_load_data(busarray, pd, qd, baseMVA)
-    for (idx ,pd_t) in pairs(pd)
-        row = busarray[idx[1], idx[2]]
-        b = row.b
-        busarray[idx[1], idx[2]] = (
-            b = merge(b, (;
-                pd = pd_t / baseMVA,
-                qd = qd[idx[1], idx[2]] / baseMVA,
-            )),
-            t = row.t,
-        )
-    end
 end
 
 #If no storage contraints, the "build_base_mpopf" returns the final version of the mpopf
@@ -211,6 +176,7 @@ function add_mpopf_cons(core, data, N, Nbus, vars, cons, form)
 end
 
 function build_mpopf(data, Nbus, N, form, user_callback; backend = nothing, T = Float64, storage_complementarity_constraint = false, kwargs...)
+    @assert N == size(data.busarray, 2) "N ($N) must equal the number of load-series periods ($(size(data.busarray, 2)))"
     core = ExaCore(T; backend = backend)
 
     vars, cons = build_base_mpopf(core, data, N)
@@ -231,6 +197,7 @@ end
 
 #different constraints used when a function is added to remove complementarity and make charge/discharge curve smooth
 function build_mpopf(data, Nbus, N, discharge_func::Function, form, user_callback; backend = nothing, T = Float64, kwargs...)
+    @assert N == size(data.busarray, 2) "N ($N) must equal the number of load-series periods ($(size(data.busarray, 2)))"
     core = ExaCore(T; backend = backend)
 
     vars, cons = build_base_mpopf(core, data, N)
@@ -409,8 +376,8 @@ function mpopf_model(
 )
 
     @assert length(curve) > 0
-    data = parse_mp_power_data(filename, N, corrective_action_ratio, T; from = from)
-    update_load_data(data.busarray, curve)
+    net = parse_mp_network(filename; from = from)
+    data = parse_mp_power_data(net, PowerIO.LoadSeries(net, curve; T = T), corrective_action_ratio, T)
     data = convert_data(data,backend)
     Nbus = size(data.bus, 1)
 
@@ -423,9 +390,9 @@ end
 
 function mpopf_model(
     filename, active_power_data, reactive_power_data;
-    pd = readdlm(active_power_data),
-    qd = readdlm(reactive_power_data),
-    N = size(pd, 2),
+    pd = nothing,
+    qd = nothing,
+    N = nothing,
     corrective_action_ratio = 0.1,
     backend = nothing,
     form = :polar,
@@ -436,11 +403,22 @@ function mpopf_model(
     kwargs...,
 )
 
-    data = parse_mp_power_data(filename, N, corrective_action_ratio, T; from = from)
-    update_load_data(data.busarray, pd, qd, data.baseMVA[])
+    net = parse_mp_network(filename; from = from)
+    series = if pd === nothing && qd === nothing
+        PowerIO.read_load_series(net, active_power_data, reactive_power_data; T = T)
+    elseif pd !== nothing && qd !== nothing
+        PowerIO.LoadSeries(net, pd, qd; T = T)
+    else
+        throw(ArgumentError(
+            "mpopf_model: pass both `pd` and `qd` as in-memory matrices, or neither " *
+            "(to read both from the `active_power_data`/`reactive_power_data` files). " *
+            "Got pd=$(pd === nothing ? "nothing" : "a matrix"), " *
+            "qd=$(qd === nothing ? "nothing" : "a matrix")."))
+    end
+    N = N === nothing ? PowerIO.n_periods(series) : N
+    data = parse_mp_power_data(net, series, corrective_action_ratio, T)
     data = convert_data(data,backend)
     Nbus = size(data.bus, 1)
-    @assert Nbus == size(pd, 1)
 
     if form != :polar && form != :rect
         error("Invalid coordinate symbol - valid options are :polar or :rect")
@@ -463,8 +441,8 @@ function mpopf_model(
 )
 
     @assert length(curve) > 0
-    data = parse_mp_power_data(filename, N, corrective_action_ratio, T; from = from)
-    update_load_data(data.busarray, curve)
+    net = parse_mp_network(filename; from = from)
+    data = parse_mp_power_data(net, PowerIO.LoadSeries(net, curve; T = T), corrective_action_ratio, T)
     data = convert_data(data,backend)
     Nbus = size(data.bus, 1)
 
@@ -477,9 +455,9 @@ end
 
 function mpopf_model(
     filename, active_power_data, reactive_power_data, discharge_func::Function;
-    pd = readdlm(active_power_data),
-    qd = readdlm(reactive_power_data),
-    N = size(pd, 2),
+    pd = nothing,
+    qd = nothing,
+    N = nothing,
     corrective_action_ratio = 0.1,
     backend = nothing,
     form = :polar,
@@ -490,12 +468,22 @@ function mpopf_model(
     kwargs...,
 )
 
-
-    data = parse_mp_power_data(filename, N, corrective_action_ratio, T; from = from)
-    update_load_data(data.busarray, pd, qd, data.baseMVA[])
+    net = parse_mp_network(filename; from = from)
+    series = if pd === nothing && qd === nothing
+        PowerIO.read_load_series(net, active_power_data, reactive_power_data; T = T)
+    elseif pd !== nothing && qd !== nothing
+        PowerIO.LoadSeries(net, pd, qd; T = T)
+    else
+        throw(ArgumentError(
+            "mpopf_model: pass both `pd` and `qd` as in-memory matrices, or neither " *
+            "(to read both from the `active_power_data`/`reactive_power_data` files). " *
+            "Got pd=$(pd === nothing ? "nothing" : "a matrix"), " *
+            "qd=$(qd === nothing ? "nothing" : "a matrix")."))
+    end
+    N = N === nothing ? PowerIO.n_periods(series) : N
+    data = parse_mp_power_data(net, series, corrective_action_ratio, T)
     data = convert_data(data,backend)
     Nbus = size(data.bus, 1)
-    @assert Nbus == size(pd, 1)
 
     if form != :polar && form != :rect
         error("Invalid coordinate symbol - valid options are :polar or :rect")
