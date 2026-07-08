@@ -82,5 +82,14 @@ end
                 from = "powermodels",
             )[1],
         )
+
+        # Passing only one of pd/qd is a clear error, not a MethodError from a
+        # `nothing` reaching PowerIO.LoadSeries. Both are read from file, or both
+        # are supplied as matrices; the files here are never read (the error is
+        # raised before load construction).
+        @test_throws ArgumentError mpopf_model(
+            matpower, "unused.Pd", "unused.Qd"; pd = zeros(3, 2))
+        @test_throws ArgumentError mpopf_model(
+            matpower, "unused.Pd", "unused.Qd"; qd = zeros(3, 2))
     end
 end

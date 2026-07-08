@@ -404,9 +404,17 @@ function mpopf_model(
 )
 
     net = parse_mp_network(filename; from = from)
-    series = pd === nothing && qd === nothing ?
-        PowerIO.read_load_series(net, active_power_data, reactive_power_data; T = T) :
+    series = if pd === nothing && qd === nothing
+        PowerIO.read_load_series(net, active_power_data, reactive_power_data; T = T)
+    elseif pd !== nothing && qd !== nothing
         PowerIO.LoadSeries(net, pd, qd; T = T)
+    else
+        throw(ArgumentError(
+            "mpopf_model: pass both `pd` and `qd` as in-memory matrices, or neither " *
+            "(to read both from the `active_power_data`/`reactive_power_data` files). " *
+            "Got pd=$(pd === nothing ? "nothing" : "a matrix"), " *
+            "qd=$(qd === nothing ? "nothing" : "a matrix")."))
+    end
     N = N === nothing ? PowerIO.n_periods(series) : N
     data = parse_mp_power_data(net, series, corrective_action_ratio, T)
     data = convert_data(data,backend)
@@ -461,9 +469,17 @@ function mpopf_model(
 )
 
     net = parse_mp_network(filename; from = from)
-    series = pd === nothing && qd === nothing ?
-        PowerIO.read_load_series(net, active_power_data, reactive_power_data; T = T) :
+    series = if pd === nothing && qd === nothing
+        PowerIO.read_load_series(net, active_power_data, reactive_power_data; T = T)
+    elseif pd !== nothing && qd !== nothing
         PowerIO.LoadSeries(net, pd, qd; T = T)
+    else
+        throw(ArgumentError(
+            "mpopf_model: pass both `pd` and `qd` as in-memory matrices, or neither " *
+            "(to read both from the `active_power_data`/`reactive_power_data` files). " *
+            "Got pd=$(pd === nothing ? "nothing" : "a matrix"), " *
+            "qd=$(qd === nothing ? "nothing" : "a matrix")."))
+    end
     N = N === nothing ? PowerIO.n_periods(series) : N
     data = parse_mp_power_data(net, series, corrective_action_ratio, T)
     data = convert_data(data,backend)
