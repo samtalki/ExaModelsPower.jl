@@ -15,7 +15,7 @@ ExaPowerIO = "0.3"
 JSON = "0.21"
 MadNLP = "0.10"
 MadNLPGPU = "0.10"
-PowerIO = "0.6.4"
+PowerIO = "0.7.3"
 julia = "1.11"
 
 [extras]
