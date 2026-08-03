@@ -9,7 +9,7 @@ function build_polar_opf(data, user_callback; backend = nothing, T=Float64, kwar
     vm = variable(
             core,
             length(data.bus);
-            start = fill!(similar(data.bus, Float64), 1.0),
+            start = fill!(similar(data.bus, T), one(T)),
             lvar = data.vmin,
             uvar = data.vmax,
         )
@@ -56,13 +56,13 @@ function build_polar_opf(data, user_callback; backend = nothing, T=Float64, kwar
 
     c_from_thermal_limit = constraint(
         core, c_thermal_limit(b,p[b.f_idx],q[b.f_idx]) for b in data.branch;
-        lcon = fill!(similar(data.branch, Float64, length(data.branch)), -Inf),
+        lcon = fill!(similar(data.branch, T, length(data.branch)), T(-Inf)),
         )
 
     c_to_thermal_limit = constraint(
         core, c_thermal_limit(b,p[b.t_idx],q[b.t_idx])
         for b in data.branch;
-        lcon = fill!(similar(data.branch, Float64, length(data.branch)), -Inf),
+        lcon = fill!(similar(data.branch, T, length(data.branch)), T(-Inf)),
     )
     
     vars = (
@@ -99,7 +99,7 @@ end
 function build_rect_opf(data, user_callback; backend = nothing, T=Float64, kwargs...)
     core = ExaCore(T; backend = backend)
 
-    vr = variable(core, length(data.bus), start = fill!(similar(data.bus, Float64), 1.0))
+    vr = variable(core, length(data.bus), start = fill!(similar(data.bus, T), one(T)))
     vim = variable(core, length(data.bus))
 
     pg = variable(core, length(data.gen); lvar = data.pmin, uvar = data.pmax)
@@ -145,13 +145,13 @@ function build_rect_opf(data, user_callback; backend = nothing, T=Float64, kwarg
 
     c_from_thermal_limit = constraint(
         core, c_thermal_limit(b,p[b.f_idx], q[b.f_idx]) for b in data.branch;
-        lcon = fill!(similar(data.branch, Float64, length(data.branch)), -Inf),
+        lcon = fill!(similar(data.branch, T, length(data.branch)), T(-Inf)),
     )
 
     c_to_thermal_limit = constraint(
         core, c_thermal_limit(b,p[b.t_idx], q[b.t_idx])
         for b in data.branch;
-        lcon = fill!(similar(data.branch, Float64, length(data.branch)), -Inf),
+        lcon = fill!(similar(data.branch, T, length(data.branch)), T(-Inf)),
     )
 
     c_voltage_magnitude = constraint(
@@ -227,9 +227,9 @@ function ac_opf_model(
     data = convert_data(data, backend)
 
     if form == :polar
-        return build_polar_opf(data, user_callback, backend = backend, T=T, kwargs...)
+        return build_polar_opf(data, user_callback; backend = backend, T = T, kwargs...)
     elseif form == :rect
-        return build_rect_opf(data, user_callback, backend = backend, T=T, kwargs...)
+        return build_rect_opf(data, user_callback; backend = backend, T = T, kwargs...)
     else
         error("Invalid coordinate symbol - valid options are :polar or :rect")
     end
