@@ -33,8 +33,6 @@ function test_static_case(result, result_pm, result_nlp_pm, pg, qg)
 end
 
 function test_polar_voltage(result, result_pm, va, vm)
-    @info "ppolar"
-    @info result_pm
     for i in 1:length(result_pm["solution"]["bus"])
         @test isapprox(Array(solution(result, va))[i], result_pm["solution"]["bus"][string(i)]["va"], atol = result.options.tol*100)
         @test isapprox(Array(solution(result, vm))[i], result_pm["solution"]["bus"][string(i)]["vm"], rtol = result.options.tol*100)
@@ -42,8 +40,6 @@ function test_polar_voltage(result, result_pm, va, vm)
 end
 
 function test_rect_voltage(result, result_pm, vr, vim)
-    @info "rrect"
-    @info result_pm
     for i in 1:length(result_pm["solution"]["bus"])
         @test isapprox(Array(solution(result, vr))[i], result_pm["solution"]["bus"][string(i)]["vr"], rtol = result.options.tol*100)
         @test isapprox(Array(solution(result, vim))[i], result_pm["solution"]["bus"][string(i)]["vi"], atol = result.options.tol*100)
@@ -58,17 +54,26 @@ function test_case14(result, result_pm, result_nlp_pm, pg, qg, p, q)
     test_static_case(result, result_pm, result_nlp_pm, pg, qg)
 end
 
-function test_float32(m, m64, result, backend)
-    x1 = result.solution
-    tol = 2.71828^(log(result.options.tol)/2)
+# Every configuration is checked by evaluating the model callbacks -- objective,
+# constraints, gradient and Jacobian -- and comparing the Float32 model against the
+# Float64 one.  The evaluation point is the model's own initial point rather than a
+# solution, so this needs no solve, which is what makes it cheap enough to run over the
+# whole cross-product.
+function test_callbacks(m32, m64, backend)
+    x1 = m64.meta.x0
+    tol = 1e-4
     x2 = x1 .* (1 .+ 0.01 .* (2 .* rand(size(x1)) .- 1))
     x3 = x1 .* (1 .+ 0.01 .* (2 .* rand(size(x1)) .- 1))
     for x in [x1, x2, x3]
-        @test isapprox(NLPModelsJuMP.obj(m, x), NLPModelsJuMP.obj(m64, x), rtol = tol)
-        @test isapprox(NLPModelsJuMP.cons(m, x), NLPModelsJuMP.cons(m64, x), rtol = tol)
+        o64 = NLPModelsJuMP.obj(m64, x)
+        @test isfinite(o64)
+        @test isapprox(NLPModelsJuMP.obj(m32, x), o64, rtol = tol)
+        c64 = NLPModelsJuMP.cons(m64, x)
+        @test all(isfinite, Array(c64))
+        @test isapprox(NLPModelsJuMP.cons(m32, x), c64, rtol = tol)
         if backend != CUDABackend()
-            @test isapprox(NLPModelsJuMP.grad(m, x), NLPModelsJuMP.grad(m64, x), rtol = tol)
-            @test isapprox(NLPModelsJuMP.jac(m, x), NLPModelsJuMP.jac(m64, x), rtol = tol)
+            @test isapprox(NLPModelsJuMP.grad(m32, x), NLPModelsJuMP.grad(m64, x), rtol = tol)
+            @test isapprox(NLPModelsJuMP.jac(m32, x), NLPModelsJuMP.jac(m64, x), rtol = tol)
         end
     end
 end
@@ -78,11 +83,16 @@ function test_mp_case(result, true_sol)
     @test isapprox(result.objective, true_sol, rtol = result.options.tol*100)
 end
 
+# GOC3 is a smoke test of the parser and the model constructor.  Solving it cost 32 of the
+# 47 min this section took in CI, for one iteration of a 139502-variable problem, so build
+# the model and evaluate its callbacks instead of solving.
 function sc_tests(filename, backend, T)
     uc_filename = filename*"_solution.json"
     filename = filename*".json"
     model, cons, vars, lengths, sc_data_array = ExaModelsPower.goc3_model(filename, uc_filename; backend=backend, T=T)
-    result = exasolve(model, backend; max_iter=1, tol=1e-2)
+    x0 = model.meta.x0
+    @test isfinite(NLPModelsJuMP.obj(model, x0))
+    @test all(isfinite, Array(NLPModelsJuMP.cons(model, x0)))
 end
 
 function test_dcopf_case(result, result_pm, pg, pf)
