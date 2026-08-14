@@ -1,6 +1,7 @@
 using Test, ExaModelsPower, MadNLP, MadNLPGPU, KernelAbstractions, CUDA, CUDSS, PowerModels, Ipopt, JuMP, ExaModels, NLPModelsJuMP
 
 include("opf_tests.jl")
+include("recipe_tests.jl")
 
 # CI runs each backend, and the GOC3 smoke test, as a separate job, so the wall clock is
 # the slowest of them rather than their sum (they were 13.0, 14.8, 21.5 and 74.9 min in run
@@ -53,10 +54,10 @@ mp_stor_test_cases = [("../data/pglib_opf_case3_lmbd_mod.m", "case3", "../data/c
                         ("../data/pglib_opf_case5_pjm_mod.m", "case5", "../data/case5_5split.Pd", "../data/case5_5split.Qd",
                         true_sol_case5_curve_stor, true_sol_case5_curve_stor_func, true_sol_case5_pregen_stor, true_sol_case5_pregen_stor_func)]
 
-static_forms = [("rect", :rect, ACRPowerModel, test_rect_voltage),
-                ("polar", :polar, ACPPowerModel, test_polar_voltage)]
+static_forms = [("rect", Rect(), ACRPowerModel, test_rect_voltage),
+                ("polar", Polar(), ACPPowerModel, test_polar_voltage)]
 
-mp_forms = [("rect", :rect), ("polar", :polar)]
+mp_forms = [("rect", Rect()), ("polar", Polar())]
 
 function example_func(d, srating)
     return d + 20/srating*d^2
@@ -124,6 +125,27 @@ function runtests()
         # backend the wall clock is the slowest backend, not the sum of all of them.
         mp_cases = mp_test_cases[1:1]
         mp_stor  = mp_stor_test_cases[1:1]
+
+        # The recipe split: `ac_opf_model` is `ac_opf_recipe` instantiated at
+        # `ac_opf_args`, and `ac_opf_core` is the same body built eagerly for
+        # ExaModelsC to compile. All three must agree, in BOTH formulations —
+        # that is the whole guarantee the split is for, and it is backend-free,
+        # so it runs once rather than per backend.
+        if SELECTION in ("all", "nothing")
+            for (filename, case, _) in test_cases, (form_str, form, _, _) in static_forms
+                @testset "$case, recipe == eager, $form_str" begin
+                    test_recipe_equivalence(filename, form)
+                end
+                @testset "$case, solution handles, $form_str" begin
+                    test_solution_handles(filename, form)
+                end
+                if haskey(ENV, "EMP_TEST_AOT")
+                    @testset "$case, compiles ahead of time, $form_str" begin
+                        test_aot(filename, form)
+                    end
+                end
+            end
+        end
 
         for backend in CONFIGS
             solving = solve_here(backend)

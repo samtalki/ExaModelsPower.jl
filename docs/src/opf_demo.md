@@ -30,7 +30,7 @@ We will begin by constructing and solving a static OPF using the function opf_mo
 model, vars, cons = ac_opf_model(
     "pglib_opf_case118_ieee.m";
     backend = CUDABackend(),
-    form = :polar,
+    form = Polar(),
     T = Float64
 );
 model
@@ -99,7 +99,7 @@ ExaModelsPower supports solving the OPF in either polar or rectangular coordinat
 ````julia
 model, vars, cons = ac_opf_model(
     "pglib_opf_case118_ieee.m";
-    form = :rect
+    form = Rect()
 )
 result = madnlp(model; tol=1e-6)
 result.objective
