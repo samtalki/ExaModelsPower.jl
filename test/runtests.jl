@@ -1,4 +1,10 @@
 using Test, ExaModelsPower, MadNLP, MadNLPGPU, KernelAbstractions, CUDA, CUDSS, PowerModels, Ipopt, JuMP, ExaModels, NLPModelsJuMP
+# Import only `CNLPModel`, not all of CNLPModels: it exports `solution` and so
+# does ExaModels, and a name exported by two loaded packages resolves to
+# neither -- which took out 24 tests that call `solution` unqualified.
+using ExaModelsCompiler
+using CNLPModels: CNLPModel
+import NLPModels
 
 include("opf_tests.jl")
 include("recipe_tests.jl")
@@ -127,8 +133,8 @@ function runtests()
         mp_stor  = mp_stor_test_cases[1:1]
 
         # The recipe split: `ac_opf_model` is `ac_opf_recipe` instantiated at
-        # `ac_opf_args`, and `ac_opf_core` is the same body built eagerly for
-        # ExaModelsC to compile. All three must agree, in BOTH formulations —
+        # `ac_opf_args`. It must agree with the same body built eagerly, in
+        # BOTH formulations —
         # that is the whole guarantee the split is for, and it is backend-free,
         # so it runs once rather than per backend.
         if SELECTION in ("all", "nothing")
@@ -139,10 +145,13 @@ function runtests()
                 @testset "$case, solution handles, $form_str" begin
                     test_solution_handles(filename, form)
                 end
-                if haskey(ENV, "EMP_TEST_AOT")
-                    @testset "$case, compiles ahead of time, $form_str" begin
-                        test_aot(filename, form)
-                    end
+            end
+
+            # Once for the whole suite, not once per case and formulation:
+            # `compile_all` is minutes of juliac.
+            if haskey(ENV, "EMP_TEST_AOT")
+                @testset "compile_all, then the models it returns" begin
+                    test_aot()
                 end
             end
         end

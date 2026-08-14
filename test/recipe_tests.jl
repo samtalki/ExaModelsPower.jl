@@ -9,7 +9,10 @@ function test_recipe_equivalence(filename, form; T = Float64)
     # recipe ∘ args — which is what `ac_opf_model` is
     m1, vars, _ = ac_opf_model(filename; form = form, T = T)
     # the same body built eagerly, data in hand — what `ExaModelsC` compiles
-    core, _, _ = ac_opf_core(filename; form = form, T = T)
+    # The eager model, built directly: same body, data already in the core.
+    data, = ExaModelsPower.opf_args(filename; T = T)
+    core, _, _ = ExaModelsPower.build_opf(ExaCore(T), form, data,
+                                          ExaModelsPower.dummy_extension, T)
     m2 = ExaModel(core)
 
     @test m1.meta.nvar == m2.meta.nvar
@@ -60,13 +63,30 @@ end
 
 # Compiling costs ~90 s per form and needs ExaModelsC, which is not a test
 # dependency, so it is opt-in: EMP_TEST_AOT=1.
-function test_aot(filename, form)
-    @eval using ExaModelsC
-    dir = mktempdir()
-    core, _, _ = ac_opf_recipe(; form = form)
-    r = Base.invokelatest(
-        getfield(Main, :ExaModelsC).compile_library,
-        joinpath(dir, "acopf"), core, filename; prefix = "acopf", argfun = ac_opf_args)
+# Compiling is minutes, so this is opt-in and runs ONCE for the whole suite
+# rather than once per case and formulation: the plain default call a user
+# makes, then a few properties of what comes back. `obj`/`cons` are checked
+# away from x0, so a library that returned constants -- or that ignored the
+# case it was handed -- would fail rather than agree trivially.
+function test_aot()
+    r = compile_all(ExaModelsPower)
     @test isfile(r.libpath)
-    rm(dir; recursive = true, force = true)
+    @test Set(Symbol.(r.prefixes)) == Set((:acp, :acr, :dcp, :mpacp, :mpacr, :mpdcp))
+
+    case = "pglib_opf_case14_ieee.m"
+    m = CNLPModel(r.libpath, :acp, case)
+    ref, _, _ = ac_opf_model(case)
+    @test (m.meta.nvar, m.meta.ncon) == (ref.meta.nvar, ref.meta.ncon)
+    @test collect(m.meta.x0) == collect(ref.meta.x0)
+    x = [0.9 + 0.02sin(i) for i = 1:m.meta.nvar]
+    @test NLPModels.obj(m, x) == NLPModels.obj(ref, x)
+    @test collect(NLPModels.cons(m, x)) == collect(NLPModels.cons(ref, x))
+
+    # The property the recipe rewrite exists for: a network size the library
+    # was never compiled against.
+    m3 = CNLPModel(r.libpath, :mpdcp, "pglib_opf_case3_lmbd.m")
+    ref3, _, _ = mpopf_model("pglib_opf_case3_lmbd.m",
+                             ExaModelsPower.MPOPF_DEFAULT_CURVE;
+                             form = ExaModelsPower.DC())
+    @test (m3.meta.nvar, m3.meta.ncon) == (ref3.meta.nvar, ref3.meta.ncon)
 end
