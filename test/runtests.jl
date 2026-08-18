@@ -8,6 +8,7 @@ import NLPModels
 
 include("opf_tests.jl")
 include("recipe_tests.jl")
+include("powerio_parser_tests.jl")
 
 # CI runs each backend, and the GOC3 smoke test, as a separate job, so the wall clock is
 # the slowest of them rather than their sum (they were 13.0, 14.8, 21.5 and 74.9 min in run
@@ -29,6 +30,9 @@ SELECTION in ("all", "nothing") && push!(CONFIGS, nothing)
 SELECTION in ("all", "cpu") && push!(CONFIGS, CPU())
 SELECTION in ("all", "cuda") && CUDA.has_cuda_gpu() && push!(CONFIGS, CUDABackend())
 const RUN_GOC3 = SELECTION in ("all", "goc3")
+# The parser tests are backend-free, so they belong to exactly one slice rather than
+# repeating in all four.  The serial slice is the cheapest of them.
+const RUN_PARSER = SELECTION in ("all", "nothing")
 
 isempty(CONFIGS) && !RUN_GOC3 && error("EMP_TEST_SELECTION=$(SELECTION) selected no tests")
 
@@ -137,6 +141,8 @@ function runtests()
         # BOTH formulations —
         # that is the whole guarantee the split is for, and it is backend-free,
         # so it runs once rather than per backend.
+        RUN_PARSER && powerio_parser_tests()
+
         if SELECTION in ("all", "nothing")
             for (filename, case, _) in test_cases, (form_str, form, _, _) in static_forms
                 @testset "$case, recipe == eager, $form_str" begin

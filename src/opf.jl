@@ -97,14 +97,14 @@ args = opf_args("pglib_opf_case118_ieee.m"; start = (vm = d -> d.vm0, va = d -> 
 model = ExaModel(ac_opf_recipe()[1], args...)
 ```
 """
-opf_args(filename; T = Float64, backend = nothing, start = (;)) =
-    opf_args(filename, T, backend, start)
+opf_args(filename; T = Float64, backend = nothing, start = (;), from = nothing) =
+    opf_args(filename, T, backend, start, from)
 
 # The positional method is the one a compiled library calls: `::Type{T}` makes
 # `T` a static parameter, where the keyword form leaves it a `Type`-typed value
 # that nothing downstream can specialize on.
-function opf_args(filename, ::Type{T}, backend = nothing, start = (;)) where {T}
-    p = parse_ac_power_data(filename, T)
+function opf_args(filename, ::Type{T}, backend = nothing, start = (;), from = nothing) where {T}
+    p = parse_ac_power_data(filename, T; from = from)
     s = merge(_default_start(T), NamedTuple(start))
     bus, gen, arc, branch = p.bus, p.gen, p.arc, p.branch
     nbus, ngen, narc, nbranch = length(bus), length(gen), length(arc), length(branch)
@@ -387,11 +387,12 @@ function opf_model(
     form::OPFForm = Polar(),
     user_callback = dummy_extension,
     start = (;),
+    from = nothing,
     kwargs...,
 )
     core, vars, cons =
         opf_recipe(; backend = backend, T = T, form = form, user_callback = user_callback)
-    args = opf_args(filename; T = T, backend = backend, start = start)
+    args = opf_args(filename; T = T, backend = backend, start = start, from = from)
     model = ExaModel(core, args...; prod = true, kwargs...)
     # The handles come out of the RECIPE, so their offsets are ArgNode
     # expressions; `solution(result, v)` cannot index with those. Resolve them

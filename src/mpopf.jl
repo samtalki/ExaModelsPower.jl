@@ -1,23 +1,32 @@
+# The load series and the powerdata come off the SAME parsed network, so row
+# `k` of `series.pd` and `data.bus[k]` are the same bus by construction.
+# Reparsing the file for each would align them only by coincidence.
+#
 # `::Type{T}`, not a `Type`-typed value — the same fault the static parser had:
-# as a plain argument it arrives abstract and `parse_ac_power_data` cannot
-# specialize, so every field read off the result widens.
-parse_mp_power_data(filename, N, r) = parse_mp_power_data(filename, N, r, Float64)
-function parse_mp_power_data(filename, N, corrective_action_ratio, ::Type{T}) where {T}
+# as a plain argument it arrives abstract and the parse cannot specialize, so
+# every field read off the result widens.
+parse_mp_power_data(net, series, N, r) = parse_mp_power_data(net, series, N, r, Float64)
+function parse_mp_power_data(net, series, N, corrective_action_ratio, ::Type{T}) where {T}
 
-    raw = parse_ac_power_data(filename, T)
-
-    nbus = length(raw.bus)
+    raw = PowerIO.parse_ac_power_data(net; T = T)
+    _check_periods(series, N)
 
     # No empty-storage ternary: its two branches had DIFFERENT types (a vector
     # of one NamedTuple shape against a matrix of another), which made the whole
     # return non-concrete — the same fault the static parser had. A comprehension
     # over empty storage is a well-typed 0xN matrix on its own.
+    #
+    # The per-period loads are merged onto each bus row as the array is built,
+    # so `busarray` is constructed once rather than built and then mutated. The
+    # rows are `@NamedTuple`s and `merge` keeps their field order, so the
+    # element type stays isbits and the GPU backends accept it.
     data = (
         ;
         raw...,
         refarray = [(i,t) for i in raw.ref_buses, t in 1:N],
         barray = [(;b, t = t) for b in raw.branch, t in 1:N ],
-        busarray = [(;b, t = t) for b in raw.bus, t in 1:N ],
+        busarray = [(; b = merge(b, (; pd = series.pd[k, t], qd = series.qd[k, t])), t = t)
+                    for (k, b) in enumerate(raw.bus), t in 1:N],
         arcarray = [(;a, t = t) for a in raw.arc, t in 1:N ],
         genarray = [(;g, t = t) for g in raw.gen, t in 1:N ],
         storarray = [(;s, t = t) for s in raw.storage, t in 1:N],
@@ -28,57 +37,32 @@ function parse_mp_power_data(filename, N, corrective_action_ratio, ::Type{T}) wh
     return data
 end
 
-function update_load_data(busarray, curve)
-
-    for t in eachindex(curve)
-        for x in 1:size(busarray, 1)
-            b = busarray[x, t]
-            busarray[x, t] = (
-                b=ExaPowerIO.BusData{typeof(b.b.pd)}(
-                    b.b.i,
-                    b.b.bus_i,
-                    b.b.type,
-                    b.b.pd*curve[t],
-                    b.b.qd*curve[t],
-                    b.b.gs*curve[t],
-                    b.b.bs*curve[t],
-                    b.b.area,
-                    b.b.vm,
-                    b.b.va,
-                    b.b.baseKV,
-                    b.b.zone,
-                    b.b.vmax,
-                    b.b.vmin,
-                  ), t=t
-                )
-        end
-    end
+function _check_periods(series, N)
+    n = PowerIO.n_periods(series)
+    N <= n || throw(
+        DimensionMismatch(
+            "a horizon of $N periods was asked for, but the load series has $n",
+        ),
+    )
+    return nothing
 end
 
-#Pd, Qd as input
-function update_load_data(busarray, pd, qd, baseMVA)
-    for (idx ,pd_t) in pairs(pd)
-        b = busarray[idx[1], idx[2]]
-        busarray[idx[1], idx[2]] = (
-            b=ExaPowerIO.BusData{typeof(b.b.pd)}(
-                b.b.i,
-                b.b.bus_i,
-                b.b.type,
-                pd_t / baseMVA,
-                qd[idx[1], idx[2]] / baseMVA,
-                b.b.gs,
-                b.b.bs,
-                b.b.area,
-                b.b.vm,
-                b.b.va,
-                b.b.baseKV,
-                b.b.zone,
-                b.b.vmax,
-                b.b.vmin,
-            ),
-            t=idx[2],
-        )
+# Both load matrices, or neither. One of the two leaves the other at its
+# base-case value with no sign that half the input was ignored.
+function _load_series(net, pd_path, qd_path, pd, qd, ::Type{T}) where {T}
+    if pd === nothing && qd === nothing
+        return PowerIO.read_load_series(net, pd_path, qd_path; T = T)
+    elseif pd !== nothing && qd !== nothing
+        return PowerIO.LoadSeries(net, pd, qd; T = T)
     end
+    throw(
+        ArgumentError(
+            "mpopf_model: pass both `pd` and `qd` as in-memory matrices, or neither " *
+            "(to read both from the given load files). Got pd=" *
+            (pd === nothing ? "nothing" : "a matrix") * ", qd=" *
+            (qd === nothing ? "nothing" : "a matrix") * ".",
+        ),
+    )
 end
 
 #If no storage contraints, the "build_base_mpopf" returns the final version of the mpopf
@@ -157,7 +141,8 @@ library can call. Define your own one-argument wrapper in your package for a
 different curve.
 """
 mpopf_args_default(filename) =
-    mpopf_args(filename, MPOPF_DEFAULT_CURVE, length(MPOPF_DEFAULT_CURVE), Float64, nothing, 0.1)
+    mpopf_args(filename, MPOPF_DEFAULT_CURVE, length(MPOPF_DEFAULT_CURVE), Float64, nothing,
+               0.1, nothing)
 
 """
     mpopf_args(filename, curve; N, T, backend, corrective_action_ratio) -> (data,)
@@ -178,15 +163,17 @@ elementwise past 31 fields, which would leave the whole argument tuple with
 concrete names and no value types.
 """
 mpopf_args(filename, curve; N = length(curve), T = Float64, backend = nothing,
-           corrective_action_ratio = 0.1) =
-    mpopf_args(filename, curve, N, T, backend, corrective_action_ratio)
+           corrective_action_ratio = 0.1, from = nothing) =
+    mpopf_args(filename, curve, N, T, backend, corrective_action_ratio, from)
 
 # The positional method is the one a compiled library reaches: `::Type{T}` makes
 # `T` a static parameter, where the keyword form leaves it a `Type`-typed value
 # nothing downstream can specialize on.
-function mpopf_args(filename, curve, N, ::Type{T}, backend, corrective_action_ratio) where {T}
-    d = parse_mp_power_data(filename, N, corrective_action_ratio, T)
-    update_load_data(d.busarray, curve)
+function mpopf_args(filename, curve, N, ::Type{T}, backend, corrective_action_ratio,
+                    from = nothing) where {T}
+    net = parse_mp_network(filename; from = from)
+    d = parse_mp_power_data(net, PowerIO.LoadSeries(net, curve; T = T), N,
+                            corrective_action_ratio, T)
     return (convert_data(_mp_narrow(d, N, T), backend),)
 end
 
@@ -633,13 +620,14 @@ function mpopf_model(
     backend = nothing,
     form::OPFForm = Polar(),
     T = Float64,
+    from = nothing,
     storage_complementarity_constraint = false,
     user_callback = dummy_extension,
     kwargs...,
 )
 
     @assert length(curve) > 0
-    data, = mpopf_args(filename, curve; N, T, backend, corrective_action_ratio)
+    data, = mpopf_args(filename, curve; N, T, backend, corrective_action_ratio, from)
     Nbus = length(data.bus)
 
     return build_mpopf(data, Nbus, N, form, user_callback, backend = backend, T = T, storage_complementarity_constraint = storage_complementarity_constraint, kwargs...)
@@ -648,25 +636,27 @@ end
 
 function mpopf_model(
     filename, active_power_data, reactive_power_data;
-    pd = readdlm(active_power_data),
-    qd = readdlm(reactive_power_data),
-    N = size(pd, 2),
+    pd = nothing,
+    qd = nothing,
+    N = nothing,
     corrective_action_ratio = 0.1,
     backend = nothing,
     form::OPFForm = Polar(),
     T = Float64,
+    from = nothing,
     storage_complementarity_constraint = false,
     user_callback = dummy_extension,
     kwargs...,
 )
 
-    d = parse_mp_power_data(filename, N, corrective_action_ratio, T)
-    update_load_data(d.busarray, pd, qd, d.baseMVA[])
-    data = convert_data(_mp_narrow(d, N, T), backend)
+    net = parse_mp_network(filename; from = from)
+    series = _load_series(net, active_power_data, reactive_power_data, pd, qd, T)
+    Np = N === nothing ? PowerIO.n_periods(series) : N
+    d = parse_mp_power_data(net, series, Np, corrective_action_ratio, T)
+    data = convert_data(_mp_narrow(d, Np, T), backend)
     Nbus = length(data.bus)
-    @assert Nbus == size(pd, 1)
 
-    return build_mpopf(data, Nbus, N, form, user_callback, backend = backend, T = T, storage_complementarity_constraint = storage_complementarity_constraint, kwargs...)
+    return build_mpopf(data, Nbus, Np, form, user_callback, backend = backend, T = T, storage_complementarity_constraint = storage_complementarity_constraint, kwargs...)
 
 end
 
@@ -678,12 +668,13 @@ function mpopf_model(
     backend = nothing,
     form::OPFForm = Polar(),
     T = Float64,
+    from = nothing,
     user_callback = dummy_extension,
     kwargs...,
 )
 
     @assert length(curve) > 0
-    data, = mpopf_args(filename, curve; N, T, backend, corrective_action_ratio)
+    data, = mpopf_args(filename, curve; N, T, backend, corrective_action_ratio, from)
     Nbus = length(data.bus)
 
     return build_mpopf(data, Nbus, N, discharge_func, form,user_callback, backend = backend, T = T, kwargs...)
@@ -692,25 +683,26 @@ end
 
 function mpopf_model(
     filename, active_power_data, reactive_power_data, discharge_func::Function;
-    pd = readdlm(active_power_data),
-    qd = readdlm(reactive_power_data),
-    N = size(pd, 2),
+    pd = nothing,
+    qd = nothing,
+    N = nothing,
     corrective_action_ratio = 0.1,
     backend = nothing,
     form::OPFForm = Polar(),
     T = Float64,
+    from = nothing,
     storage_complementarity_constraint = false,
     user_callback = dummy_extension,
     kwargs...,
 )
 
-
-    d = parse_mp_power_data(filename, N, corrective_action_ratio, T)
-    update_load_data(d.busarray, pd, qd, d.baseMVA[])
-    data = convert_data(_mp_narrow(d, N, T), backend)
+    net = parse_mp_network(filename; from = from)
+    series = _load_series(net, active_power_data, reactive_power_data, pd, qd, T)
+    Np = N === nothing ? PowerIO.n_periods(series) : N
+    d = parse_mp_power_data(net, series, Np, corrective_action_ratio, T)
+    data = convert_data(_mp_narrow(d, Np, T), backend)
     Nbus = length(data.bus)
-    @assert Nbus == size(pd, 1)
 
-    return build_mpopf(data, Nbus, N, discharge_func, form,user_callback, backend = backend, T = T, kwargs...)
+    return build_mpopf(data, Nbus, Np, discharge_func, form,user_callback, backend = backend, T = T, kwargs...)
 end
 
