@@ -84,6 +84,47 @@ function powerio_parser_tests()
             @test [b.b.pd for b in d.busarray[:, 2]] ≈ 0.5 .* [b.b.pd for b in d.busarray[:, 1]]
         end
 
+        # A zero line rating means "no limit" in every format PowerIO reads, and real
+        # cases use it: every arc of stock MATPOWER case14, case57 and case118. Read
+        # literally it bounds the flow at exactly zero and asks for p^2 + q^2 <= 0,
+        # which made those cases INFEASIBLE_PROBLEM_DETECTED rather than solved.
+        mktempdir() do dir
+            src = read(_case_path("pglib_opf_case14_ieee.m"), String)
+            zeroed = joinpath(dir, "case14_norate.m")
+            open(zeroed, "w") do io
+                inbranch = false
+                for l in split(src, '\n')
+                    if !inbranch && occursin(r"^\s*mpc\.branch\s*=\s*\[", l)
+                        inbranch = true
+                    elseif inbranch && occursin(r"^\s*\];", l)
+                        inbranch = false
+                    elseif inbranch
+                        f = split(l, '\t')
+                        length(f) > 6 && (f[7] = " 0.0")
+                        l = join(f, '\t')
+                    end
+                    println(io, l)
+                end
+            end
+
+            d = ExaModelsPower.opf_args(zeroed; T = Float64)[1]
+            @test all(isinf, d.rate_a)
+            @test all(isinf, d.branch_rate_a)
+            @test all(isinf, d.branch_thermal_ucon)
+
+            for form in (Polar(), Rect())
+                m, _, _ = ac_opf_model(zeroed; form = form)
+                @test all(isfinite, NLPModels.cons(m, m.meta.x0))
+                r = madnlp(m; print_level = MadNLP.ERROR, tol = 1e-8)
+                @test r.status == MadNLP.SOLVE_SUCCEEDED
+            end
+
+            # The rated case is untouched: every bound is the rating itself.
+            rated = ExaModelsPower.opf_args(_case_path("pglib_opf_case14_ieee.m"); T = Float64)[1]
+            @test all(isfinite, rated.rate_a)
+            @test all(iszero, rated.branch_thermal_ucon)
+        end
+
         mktempdir() do dir
             matpower = _case_path("pglib_opf_case3_lmbd.m")
             psse_path = joinpath(dir, "case3.raw")
