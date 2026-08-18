@@ -129,6 +129,7 @@ function runtests()
         # The PowerModels/Ipopt and JuMP/MadNLP reference solutions do not depend on the
         # backend, so compute them once per case/form and reuse them.
         static_ref_cache = Dict{Tuple{String,String},Any}()
+        dcopf_ref_cache = Dict{String,Any}()
 
         # case3 and case5 exercise the same code with different data, so the multi-period
         # sections keep case3 only.  Every backend runs the same set: with one job per
@@ -250,10 +251,27 @@ function runtests()
 
             # DCOPF
             for (filename, case, _) in test_cases
+                m32, _, _ = dcopf_model(filename; T=Float32, backend = backend)
+                m64, v64, _ = dcopf_model(filename; T=Float64, backend = backend)
+
                 @testset "$case, DCOPF, $backend" begin
-                    m32, _, _ = dcopf_model(filename; T=Float32, backend = backend)
-                    m64, _, _ = dcopf_model(filename; T=Float64, backend = backend)
                     test_callbacks(m32, m64, backend)
+                end
+
+                # Evaluating the callbacks says nothing about the answer, so DCOPF gets
+                # the same carve-out as static AC: the smallest case is solved against
+                # the PowerModels reference, and every other case is callbacks only.
+                if solving && case == solve_case
+                    result64 = exasolve(m64, backend; print_level = MadNLP.ERROR)
+
+                    result_pm = get!(dcopf_ref_cache, filename) do
+                        nlp_solver = JuMP.optimizer_with_attributes(Ipopt.Optimizer, "tol"=>Float64(result64.options.tol), "print_level"=>0)
+                        solve_opf(filename, DCPPowerModel, nlp_solver)
+                    end
+
+                    @testset "$case, DCOPF solve, $backend" begin
+                        test_dcopf_case(result64, result_pm, v64.pg, v64.pf)
+                    end
                 end
             end
 
