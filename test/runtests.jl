@@ -8,6 +8,7 @@ import NLPModels
 
 include("opf_tests.jl")
 include("recipe_tests.jl")
+include("powerio_parser_tests.jl")
 
 # CI runs each backend, and the GOC3 smoke test, as a separate job, so the wall clock is
 # the slowest of them rather than their sum (they were 13.0, 14.8, 21.5 and 74.9 min in run
@@ -29,6 +30,9 @@ SELECTION in ("all", "nothing") && push!(CONFIGS, nothing)
 SELECTION in ("all", "cpu") && push!(CONFIGS, CPU())
 SELECTION in ("all", "cuda") && CUDA.has_cuda_gpu() && push!(CONFIGS, CUDABackend())
 const RUN_GOC3 = SELECTION in ("all", "goc3")
+# The parser tests are backend-free, so they belong to exactly one slice rather than
+# repeating in all four.  The serial slice is the cheapest of them.
+const RUN_PARSER = SELECTION in ("all", "nothing")
 
 isempty(CONFIGS) && !RUN_GOC3 && error("EMP_TEST_SELECTION=$(SELECTION) selected no tests")
 
@@ -125,6 +129,7 @@ function runtests()
         # The PowerModels/Ipopt and JuMP/MadNLP reference solutions do not depend on the
         # backend, so compute them once per case/form and reuse them.
         static_ref_cache = Dict{Tuple{String,String},Any}()
+        dcopf_ref_cache = Dict{String,Any}()
 
         # case3 and case5 exercise the same code with different data, so the multi-period
         # sections keep case3 only.  Every backend runs the same set: with one job per
@@ -137,6 +142,8 @@ function runtests()
         # BOTH formulations —
         # that is the whole guarantee the split is for, and it is backend-free,
         # so it runs once rather than per backend.
+        RUN_PARSER && powerio_parser_tests()
+
         if SELECTION in ("all", "nothing")
             for (filename, case, _) in test_cases, (form_str, form, _, _) in static_forms
                 @testset "$case, recipe == eager, $form_str" begin
@@ -244,10 +251,27 @@ function runtests()
 
             # DCOPF
             for (filename, case, _) in test_cases
+                m32, _, _ = dcopf_model(filename; T=Float32, backend = backend)
+                m64, v64, _ = dcopf_model(filename; T=Float64, backend = backend)
+
                 @testset "$case, DCOPF, $backend" begin
-                    m32, _, _ = dcopf_model(filename; T=Float32, backend = backend)
-                    m64, _, _ = dcopf_model(filename; T=Float64, backend = backend)
                     test_callbacks(m32, m64, backend)
+                end
+
+                # Evaluating the callbacks says nothing about the answer, so DCOPF gets
+                # the same carve-out as static AC: the smallest case is solved against
+                # the PowerModels reference, and every other case is callbacks only.
+                if solving && case == solve_case
+                    result64 = exasolve(m64, backend; print_level = MadNLP.ERROR)
+
+                    result_pm = get!(dcopf_ref_cache, filename) do
+                        nlp_solver = JuMP.optimizer_with_attributes(Ipopt.Optimizer, "tol"=>Float64(result64.options.tol), "print_level"=>0)
+                        solve_opf(filename, DCPPowerModel, nlp_solver)
+                    end
+
+                    @testset "$case, DCOPF solve, $backend" begin
+                        test_dcopf_case(result64, result_pm, v64.pg, v64.pf)
+                    end
                 end
             end
 
