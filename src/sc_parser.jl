@@ -1,23 +1,9 @@
-# PowerIO (src/goc3.jl) returns the general GOC3 topology and time-series rows,
-# keyed by uid and per-class index. The stacked global variable numbering used
-# below (j, j_pr, j_cs, j_prcs, j_sh: offsets into one variable vector) is
-# specific to this optimization model, so it is defined and threaded on here.
-is_pr(uid::Int, L_J_pr::Int, L_J_cs::Int, producers_first::Bool)::Bool =
-    producers_first ? uid < L_J_pr : uid >= L_J_cs
-get_j_prcs(uid_str::String, L_J_pr::Int, L_J_cs::Int, producers_first::Bool) =
-    parse(Int, match(r"\d+", uid_str).match) + 1
-
-function get_j_pr(uid_str::String, L_J_pr::Int, L_J_cs::Int, producers_first::Bool)
-    offset = Int64(producers_first ? 0 : (-L_J_cs))
-    parse(Int, match(r"\d+", uid_str).match) + 1 + offset
-end
-
-function get_j_cs(uid_str::String, L_J_pr::Int, L_J_cs::Int, producers_first::Bool)
-    offset = Int64(producers_first ? (-L_J_pr) : 0)
-    parse(Int, match(r"\d+", uid_str).match) + 1 + offset
-end
-
-_uidnum(s) = parse(Int, match(r"\d+", s).match)
+# PowerIO returns the general GOC3 topology and time-series rows, keyed by uid
+# and per-class document-order ordinals (j_dev within the class, j_sdd in the
+# canonical producers-then-consumers stacking). The stacked global variable
+# numbering used below (j, j_pr, j_cs, j_prcs, j_sh: offsets into one variable
+# vector) is specific to this optimization model, so it is threaded on here —
+# as arithmetic on the ordinals, never as a read of a uid spelling.
 
 # Shutdown power capability p_sdpc[j_prcs, t, t_prime]. Model-specific: it is
 # indexed in this model's stacked producer/consumer variable space.
@@ -81,16 +67,13 @@ function goc3_shutdown_power_cap_sums!(sum_p, sum_u, devices, commitment, period
     return nothing
 end
 
-function parse_sc_data(data, uc_data)
+function parse_sc_data(scopf_text, uc_data)
     # One call to PowerIO returns the full set of format-neutral GOC3 SCOPF index
     # sets; this function threads on the model's stacked variable numbering below.
-    scd = PowerIO.goc3_scopf_data(data)
+    # `scopf_text` is the GOC3 document itself (read the file at the call site).
+    scd = PowerIO.goc3_scopf_data(scopf_text)
     sc_data = scd.static
     lengths = scd.lengths
-    # Which device class owns the lower uid block, which is what the stacked
-    # producer/consumer offsets below are built on. PowerIO derives it from the uid
-    # numbers and warns when the two classes interleave.
-    producers_first = scd.producers_first
 
     # `lengths` is PowerIO's NamedTuple of static index-set sizes, including the
     # contingency count K. Bind the names this function uses by name; the four
@@ -98,9 +81,9 @@ function parse_sc_data(data, uc_data)
     (; L_J_ln, L_J_ac, L_J_br, L_J_cs, L_J_pr, L_J_cspr, L_T, L_N_p, K) = lengths
 
     # Thread this model's stacked global variable indices onto PowerIO's general
-    # rows, reproducing the numbering the model layer expects.
-    _j_pr(uid) = (j = _uidnum(uid) + L_J_br + 1, j_prcs = get_j_prcs(uid, L_J_pr, L_J_cs, producers_first), j_pr = get_j_pr(uid, L_J_pr, L_J_cs, producers_first))
-    _j_cs(uid) = (j = _uidnum(uid) + L_J_br + 1, j_prcs = get_j_prcs(uid, L_J_pr, L_J_cs, producers_first), j_cs = get_j_cs(uid, L_J_pr, L_J_cs, producers_first))
+    # rows: arithmetic on the document-order ordinals the rows carry.
+    _stack_pr(r) = (j = r.j_sdd + L_J_br, j_prcs = r.j_sdd, j_pr = r.j_dev)
+    _stack_cs(r) = (j = r.j_sdd + L_J_br, j_prcs = r.j_sdd, j_cs = r.j_dev)
     sc_data = (
         bus = sc_data.bus,
         shunt = [(j = s.j_sh + L_J_br + L_J_cspr, s...) for s in sc_data.shunt],
@@ -111,18 +94,23 @@ function parse_sc_data(data, uc_data)
         vwr = [(j = b.j_xf + L_J_ln, j_ac = b.j_xf + L_J_ln, b...) for b in sc_data.vwr],
         fwr = [(j = b.j_xf + L_J_ln, j_ac = b.j_xf + L_J_ln, b...) for b in sc_data.fwr],
         dc_branch = [(j = b.j_dc + L_J_ac, b...) for b in sc_data.dc_branch],
-        prod = [(j = _uidnum(p.uid) + L_J_br + 1, j_pr = get_j_pr(p.uid, L_J_pr, L_J_cs, producers_first), j_prcs = get_j_prcs(p.uid, L_J_pr, L_J_cs, producers_first), p...) for p in sc_data.prod],
-        cons = [(j = _uidnum(p.uid) + L_J_br + 1, j_cs = get_j_cs(p.uid, L_J_pr, L_J_cs, producers_first), j_prcs = get_j_prcs(p.uid, L_J_pr, L_J_cs, producers_first), p...) for p in sc_data.cons],
+        prod = [(; _stack_pr(p)..., p...) for p in sc_data.prod],
+        cons = [(; _stack_cs(c)..., c...) for c in sc_data.cons],
         active_reserve = [(n = r.n_p, r...) for r in sc_data.active_reserve],
         reactive_reserve = [(n = r.n_q + L_N_p, r...) for r in sc_data.reactive_reserve],
-        active_reserve_set_pr = [(i = r.i, j = _uidnum(r.uid) + L_J_br + 1, n = r.n_p, n_p = r.n_p, j_pr = get_j_pr(r.uid, L_J_pr, L_J_cs, producers_first), j_prcs = get_j_prcs(r.uid, L_J_pr, L_J_cs, producers_first)) for r in sc_data.active_reserve_set_pr],
-        active_reserve_set_cs = [(i = r.i, j = _uidnum(r.uid) + L_J_br + 1, n = r.n_p, n_p = r.n_p, j_cs = get_j_cs(r.uid, L_J_pr, L_J_cs, producers_first), j_prcs = get_j_prcs(r.uid, L_J_pr, L_J_cs, producers_first)) for r in sc_data.active_reserve_set_cs],
-        reactive_reserve_set_pr = [(i = r.i, j = _uidnum(r.uid) + L_J_br + 1, n = r.n_q + L_N_p, n_q = r.n_q, j_pr = get_j_pr(r.uid, L_J_pr, L_J_cs, producers_first), j_prcs = get_j_prcs(r.uid, L_J_pr, L_J_cs, producers_first)) for r in sc_data.reactive_reserve_set_pr],
-        reactive_reserve_set_cs = [(i = r.i, j = _uidnum(r.uid) + L_J_br + 1, n = r.n_q + L_N_p, n_q = r.n_q, j_cs = get_j_cs(r.uid, L_J_pr, L_J_cs, producers_first), j_prcs = get_j_prcs(r.uid, L_J_pr, L_J_cs, producers_first)) for r in sc_data.reactive_reserve_set_cs],
+        active_reserve_set_pr = [(i = r.i, _stack_pr(r)..., n = r.n_p, n_p = r.n_p) for r in sc_data.active_reserve_set_pr],
+        active_reserve_set_cs = [(i = r.i, _stack_cs(r)..., n = r.n_p, n_p = r.n_p) for r in sc_data.active_reserve_set_cs],
+        reactive_reserve_set_pr = [(i = r.i, _stack_pr(r)..., n = r.n_q + L_N_p, n_q = r.n_q) for r in sc_data.reactive_reserve_set_pr],
+        reactive_reserve_set_cs = [(i = r.i, _stack_cs(r)..., n = r.n_q + L_N_p, n_q = r.n_q) for r in sc_data.reactive_reserve_set_cs],
     )
 
-    periods = data.periods
-    dt = Float64.(data.dt)
+    # Stacked indices by device uid, for the rows that reference a device from
+    # another table (energy windows, price blocks).
+    pr_stack = Dict(p.uid => (j = p.j, j_prcs = p.j_prcs, j_pr = p.j_pr) for p in sc_data.prod)
+    cs_stack = Dict(c.uid => (j = c.j, j_prcs = c.j_prcs, j_cs = c.j_cs) for c in sc_data.cons)
+
+    periods = 1:L_T
+    dt = scd.dt
     # Interval end times, once, from the cumulative durations. `goc3_interval_bounds`
     # re-sums `dt[1:t]` on every call, and these are read inside a t by t_prime loop
     # over every device.
@@ -130,9 +118,9 @@ function parse_sc_data(data, uc_data)
     a_start = a_end .- dt
 
     sdd_uc = uc_data["time_series_output"]["simple_dispatchable_device"]
-    PowerIO.goc3_add_status_flags!(uc_data["time_series_output"]["ac_line"], data.ac_line_lookup)
-    PowerIO.goc3_add_status_flags!(uc_data["time_series_output"]["two_winding_transformer"], data.twt_lookup)
-    PowerIO.goc3_add_status_flags!(sdd_uc, data.sdd_lookup)
+    PowerIO.goc3_add_status_flags!(uc_data["time_series_output"]["ac_line"], scd.static.acl_branch)
+    PowerIO.goc3_add_status_flags!(uc_data["time_series_output"]["two_winding_transformer"], scd.static.acx_branch)
+    PowerIO.goc3_add_status_flags!(sdd_uc, vcat(scd.static.prod, scd.static.cons))
     # The commitment table is joined to the device rows by uid; as a linear scan per
     # (device, t, t_prime) triple that join was the dominant cost of this function.
     commitment = Dict{String,Any}(String(uc["uid"]) => uc for uc in sdd_uc)
@@ -166,14 +154,14 @@ function parse_sc_data(data, uc_data)
 
     # Multi-interval energy requirement windows and their per-period membership.
     ew = scd.energy_windows
-    W_en_max_pr = [(w_en_max_pr_ind = r.w_en_max_pr_ind, _j_pr(r.uid)..., a_en_max_start = r.a_en_max_start, a_en_max_end = r.a_en_max_end, e_max = r.e_max) for r in ew.W_en_max_pr]
-    W_en_max_cs = [(w_en_max_cs_ind = r.w_en_max_cs_ind, _j_cs(r.uid)..., a_en_max_start = r.a_en_max_start, a_en_max_end = r.a_en_max_end, e_max = r.e_max) for r in ew.W_en_max_cs]
-    W_en_min_pr = [(w_en_min_pr_ind = r.w_en_min_pr_ind, _j_pr(r.uid)..., a_en_min_start = r.a_en_min_start, a_en_min_end = r.a_en_min_end, e_min = r.e_min) for r in ew.W_en_min_pr]
-    W_en_min_cs = [(w_en_min_cs_ind = r.w_en_min_cs_ind, _j_cs(r.uid)..., a_en_min_start = r.a_en_min_start, a_en_min_end = r.a_en_min_end, e_min = r.e_min) for r in ew.W_en_min_cs]
-    T_w_en_max_pr = [(w_en_max_pr_ind = r.w_en_max_pr_ind, _j_pr(r.uid)..., t = r.t, dt = r.dt) for r in ew.T_w_en_max_pr]
-    T_w_en_max_cs = [(w_en_max_cs_ind = r.w_en_max_cs_ind, _j_cs(r.uid)..., t = r.t, dt = r.dt) for r in ew.T_w_en_max_cs]
-    T_w_en_min_pr = [(w_en_min_pr_ind = r.w_en_min_pr_ind, _j_pr(r.uid)..., t = r.t, dt = r.dt) for r in ew.T_w_en_min_pr]
-    T_w_en_min_cs = [(w_en_min_cs_ind = r.w_en_min_cs_ind, _j_cs(r.uid)..., t = r.t, dt = r.dt) for r in ew.T_w_en_min_cs]
+    W_en_max_pr = [(w_en_max_pr_ind = r.w_en_max_pr_ind, pr_stack[r.uid]..., a_en_max_start = r.a_en_max_start, a_en_max_end = r.a_en_max_end, e_max = r.e_max) for r in ew.W_en_max_pr]
+    W_en_max_cs = [(w_en_max_cs_ind = r.w_en_max_cs_ind, cs_stack[r.uid]..., a_en_max_start = r.a_en_max_start, a_en_max_end = r.a_en_max_end, e_max = r.e_max) for r in ew.W_en_max_cs]
+    W_en_min_pr = [(w_en_min_pr_ind = r.w_en_min_pr_ind, pr_stack[r.uid]..., a_en_min_start = r.a_en_min_start, a_en_min_end = r.a_en_min_end, e_min = r.e_min) for r in ew.W_en_min_pr]
+    W_en_min_cs = [(w_en_min_cs_ind = r.w_en_min_cs_ind, cs_stack[r.uid]..., a_en_min_start = r.a_en_min_start, a_en_min_end = r.a_en_min_end, e_min = r.e_min) for r in ew.W_en_min_cs]
+    T_w_en_max_pr = [(w_en_max_pr_ind = r.w_en_max_pr_ind, pr_stack[r.uid]..., t = r.t, dt = r.dt) for r in ew.T_w_en_max_pr]
+    T_w_en_max_cs = [(w_en_max_cs_ind = r.w_en_max_cs_ind, cs_stack[r.uid]..., t = r.t, dt = r.dt) for r in ew.T_w_en_max_cs]
+    T_w_en_min_pr = [(w_en_min_pr_ind = r.w_en_min_pr_ind, pr_stack[r.uid]..., t = r.t, dt = r.dt) for r in ew.T_w_en_min_pr]
+    T_w_en_min_cs = [(w_en_min_cs_ind = r.w_en_min_cs_ind, cs_stack[r.uid]..., t = r.t, dt = r.dt) for r in ew.T_w_en_min_cs]
     L_W_en_max_pr = length(W_en_max_pr)
     L_W_en_max_cs = length(W_en_max_cs)
     L_W_en_min_pr = length(W_en_min_pr)
@@ -181,8 +169,8 @@ function parse_sc_data(data, uc_data)
 
     pb_pr = scd.price_blocks.producer
     pb_cs = scd.price_blocks.consumer
-    p_jtm_flattened_pr = [(flat_k = r.flat_k, _j_pr(r.uid)..., t = r.t, m = r.m, c_en = r.c_en, p_max = r.p_max) for r in pb_pr]
-    p_jtm_flattened_cs = [(flat_k = r.flat_k, _j_cs(r.uid)..., t = r.t, m = r.m, c_en = r.c_en, p_max = r.p_max) for r in pb_cs]
+    p_jtm_flattened_pr = [(flat_k = r.flat_k, pr_stack[r.uid]..., t = r.t, m = r.m, c_en = r.c_en, p_max = r.p_max) for r in pb_pr]
+    p_jtm_flattened_cs = [(flat_k = r.flat_k, cs_stack[r.uid]..., t = r.t, m = r.m, c_en = r.c_en, p_max = r.p_max) for r in pb_cs]
 
     # Post-contingency surviving AC branches. PowerIO enumerates the pure survivor
     # rows per contingency; here we attach the UC on_status and expand over
@@ -414,21 +402,30 @@ function parse_sc_data(data, uc_data)
     # which already carry the contingency count.
     lengths = merge(lengths, (; L_W_en_min_pr, L_W_en_min_cs, L_W_en_max_pr, L_W_en_max_cs))
 
-    return sc_time_data, lengths, producers_first
+    return sc_time_data, lengths
 end
 
-function save_go3_solution(uc_filename, solution_name, result, vars, lengths, producers_first)
+function save_go3_solution(case_filename, uc_filename, solution_name, result, vars, lengths)
+    # The writer maps every solution row back to a variable index through the
+    # instance's uid tables, so a uid can spell anything. Rebuilding the
+    # instance here keeps the function self-contained (one extra parse per
+    # solution write).
+    scd = PowerIO.goc3_scopf_data(read(case_filename, String))
+    st = scd.static
+    pr_index = Dict(r.uid => r.j_dev for r in st.prod)
+    cs_index = Dict(r.uid => r.j_dev for r in st.cons)
+    xf_index = Dict(r.uid => r.j_xf for r in st.acx_branch)
+    dc_index = Dict(r.uid => r.j_dc for r in st.dc_branch)
+    bus_index = Dict(r.uid => r.i for r in st.bus)
+
     uc_data = JSON.parsefile(uc_filename)
-    (; L_J_pr, L_J_cs, L_T) = lengths
+    (; L_T) = lengths
     #Update simple dispatchable devices
     for line in uc_data["time_series_output"]["simple_dispatchable_device"]
-        raw_uid = _uidnum(line["uid"])
-        solution_index = raw_uid + 1 #This corresponds to j_prcs
-        if !is_pr(raw_uid, L_J_pr, L_J_cs, producers_first)
+        uid = String(line["uid"])
+        if haskey(cs_index, uid)
             #This section corresponds to consuming devices
-            if producers_first
-                solution_index -= L_J_pr
-            end
+            solution_index = cs_index[uid]
             line["p_syn_res"] = Array(solution(result, vars.p_jt_scr_cs))[solution_index,:]
             line["p_ramp_res_up_online"] = Array(solution(result, vars.p_jt_rru_on_cs))[solution_index,:]
             line["p_nsyn_res"] = zeros(L_T)
@@ -443,9 +440,7 @@ function save_go3_solution(uc_filename, solution_name, result, vars, lengths, pr
             line["p_ramp_res_down_offline"] = Array(solution(result, vars.p_jt_rrd_off_cs))[solution_index,:]
         else
             #Producing devices
-            if !producers_first
-                solution_index -= L_J_cs
-            end
+            solution_index = pr_index[uid]
             line["p_syn_res"] = Array(solution(result, vars.p_jt_scr_pr))[solution_index,:]
             line["p_ramp_res_up_online"] = Array(solution(result, vars.p_jt_rru_on_pr))[solution_index,:]
             line["p_nsyn_res"] = Array(solution(result, vars.p_jt_nsc_pr))[solution_index,:]
@@ -462,15 +457,15 @@ function save_go3_solution(uc_filename, solution_name, result, vars, lengths, pr
     end
     #Update two winding transformers
     for line in uc_data["time_series_output"]["two_winding_transformer"]
-        solution_index = _uidnum(line["uid"]) + 1 #This corresponds to j_xf
+        solution_index = xf_index[String(line["uid"])]
         line["tm"] = Array(solution(result, vars.τ_jt_xf))[solution_index,:]
-        line["ta"] = Array(solution(result, vars.φ_jt_xf))[solution_index,:] 
+        line["ta"] = Array(solution(result, vars.φ_jt_xf))[solution_index,:]
     end
     #ac line flows can be inferred from voltage and angle levels
 
     #Update DC lines
     for line in uc_data["time_series_output"]["dc_line"]
-        solution_index = _uidnum(line["uid"]) + 1 #This corresponds to j_dc
+        solution_index = dc_index[String(line["uid"])]
         line["qdc_fr"] = Array(solution(result, vars.q_jt_fr_dc))[solution_index,:]
         line["pdc_fr"] = Array(solution(result, vars.p_jt_fr_dc))[solution_index,:] #pdc_to is implied from energy conservation
         line["qdc_to"] = Array(solution(result, vars.q_jt_to_dc))[solution_index,:]
@@ -478,7 +473,7 @@ function save_go3_solution(uc_filename, solution_name, result, vars, lengths, pr
 
     #Update buses
     for line in uc_data["time_series_output"]["bus"]
-        solution_index = _uidnum(line["uid"]) + 1 #This corresponds to i
+        solution_index = bus_index[String(line["uid"])]
         line["vm"] = Array(solution(result, vars.v_it))[solution_index,:]
         line["va"] = Array(solution(result, vars.θ_it))[solution_index,:]
     end

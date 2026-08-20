@@ -1,4 +1,5 @@
 using Test, ExaModelsPower, MadNLP, MadNLPGPU, KernelAbstractions, CUDA, CUDSS, PowerModels, Ipopt, JuMP, ExaModels, NLPModelsJuMP
+import ExaModelsPower.JSON as JSON
 # Import only `CNLPModel`, not all of CNLPModels: it exports `solution` and so
 # does ExaModels, and a name exported by two loaded packages resolves to
 # neither -- which took out 24 tests that call `solution` unqualified.
@@ -294,6 +295,9 @@ function runtests()
         if RUN_GOC3
             @testset "GOC3, Float64, nothing" begin
                 sc_tests("../data/C3E4N00073D1_scenario_303", nothing, Float64)
+            end
+            @testset "GOC3 uid invariance" begin
+                sc_uid_invariance_tests("../data/C3E4N00073D1_scenario_303", nothing, Float64)
             end
         end
     end
