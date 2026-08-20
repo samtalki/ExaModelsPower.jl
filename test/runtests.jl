@@ -11,12 +11,12 @@ include("opf_tests.jl")
 include("recipe_tests.jl")
 include("powerio_parser_tests.jl")
 
-# CI runs each backend, and the GOC3 smoke test, as a separate job, so the wall clock is
-# the slowest of them rather than their sum (they were 13.0, 14.8, 21.5 and 74.9 min in run
-# 30814411004).  EMP_TEST_SELECTION names the slice; it defaults to everything, so a plain
-# local `Pkg.test()` still runs the whole suite.
+# CI runs each backend, GOC3, and AOT as separate jobs, so the wall clock is the
+# slowest of them rather than their sum. EMP_TEST_SELECTION names the slice; it
+# defaults to the runtime suite, so a plain local `Pkg.test()` runs every model
+# test without compiling the shared library.
 const SELECTION = get(ENV, "EMP_TEST_SELECTION", "all")
-const VALID_SELECTIONS = ("all", "nothing", "cpu", "cuda", "goc3")
+const VALID_SELECTIONS = ("all", "nothing", "cpu", "cuda", "goc3", "aot")
 SELECTION in VALID_SELECTIONS ||
     error("EMP_TEST_SELECTION must be one of $(join(VALID_SELECTIONS, ", ")), got $(repr(SELECTION))")
 
@@ -31,11 +31,15 @@ SELECTION in ("all", "nothing") && push!(CONFIGS, nothing)
 SELECTION in ("all", "cpu") && push!(CONFIGS, CPU())
 SELECTION in ("all", "cuda") && CUDA.has_cuda_gpu() && push!(CONFIGS, CUDABackend())
 const RUN_GOC3 = SELECTION in ("all", "goc3")
+# AOT has its own CI slice because it compiles all six models and does not need
+# a GPU. Keep EMP_TEST_AOT as the local opt-in for a full `Pkg.test()` run.
+const RUN_AOT = SELECTION == "aot" || haskey(ENV, "EMP_TEST_AOT")
 # The parser tests are backend-free, so they belong to exactly one slice rather than
 # repeating in all four.  The serial slice is the cheapest of them.
 const RUN_PARSER = SELECTION in ("all", "nothing")
 
-isempty(CONFIGS) && !RUN_GOC3 && error("EMP_TEST_SELECTION=$(SELECTION) selected no tests")
+isempty(CONFIGS) && !RUN_GOC3 && !RUN_AOT &&
+    error("EMP_TEST_SELECTION=$(SELECTION) selected no tests")
 
 test_cases = [("../data/pglib_opf_case3_lmbd.m", "case3", test_case3),
               ("../data/pglib_opf_case5_pjm.m", "case5", test_case5),
@@ -145,6 +149,12 @@ function runtests()
         # so it runs once rather than per backend.
         RUN_PARSER && powerio_parser_tests()
 
+        if RUN_AOT
+            @testset "compile_all, then the models it returns" begin
+                test_aot()
+            end
+        end
+
         if SELECTION in ("all", "nothing")
             for (filename, case, _) in test_cases, (form_str, form, _, _) in static_forms
                 @testset "$case, recipe == eager, $form_str" begin
@@ -152,14 +162,6 @@ function runtests()
                 end
                 @testset "$case, solution handles, $form_str" begin
                     test_solution_handles(filename, form)
-                end
-            end
-
-            # Once for the whole suite, not once per case and formulation:
-            # `compile_all` is minutes of juliac.
-            if haskey(ENV, "EMP_TEST_AOT")
-                @testset "compile_all, then the models it returns" begin
-                    test_aot()
                 end
             end
         end

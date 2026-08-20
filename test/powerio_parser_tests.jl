@@ -39,6 +39,14 @@ function powerio_parser_tests()
             _test_matches_exapowerio(actual, expected)
         end
 
+        # Only bare names use the PGLib fallback. An explicit path must reach
+        # PowerIO unchanged even when it is missing, so its error names the
+        # caller's path rather than a fabricated path inside the artifact.
+        let missing = joinpath("missing-cases", "case.m")
+            @test ExaModelsPower._case_path(missing) == missing
+            @test isfile(ExaModelsPower._case_path("pglib_opf_case3_lmbd.m"))
+        end
+
         # Every model here is built from the parse, and a single abstract field in it
         # leaves `ExaModel(CORE, data)` unresolved under `--trim=safe`. The row types
         # must also be isbits, or the GPU backends refuse the arrays built from them.
@@ -63,7 +71,7 @@ function powerio_parser_tests()
         # type must stay concrete/isbits so the GPU kernels accept it (mirrors the
         # SCOPF boundary test, and surfaces a PowerIO regression without a GPU runner).
         let mp_net = ExaModelsPower.parse_mp_network(_case_path("pglib_opf_case3_lmbd.m"))
-            mp_series = PowerIO.LoadSeries(mp_net, [1.0, 0.95]; T = Float64)
+            mp_series = PowerIO.LoadSeries(mp_net, [1.0, 0.95], Float64)
             mp_data = ExaModelsPower.parse_mp_power_data(mp_net, mp_series, 2, 0.1, Float64)
             @test isconcretetype(eltype(mp_data.busarray))
             @test isbitstype(eltype(mp_data.busarray))
@@ -74,10 +82,30 @@ function powerio_parser_tests()
                 mp_net, mp_series, 3, 0.1, Float64)
         end
 
+        # The exact multiperiod argument type is part of the compiled library
+        # boundary. Concrete rows at run time are not enough: juliac needs to
+        # infer the same closed type before it emits the library.
+        let path = _case_path("pglib_opf_case3_lmbd.m"), curve = [1.0, 0.95]
+            args = (path, curve, 2, Float64, nothing, 0.1, nothing)
+            actual = ExaModelsPower.mpopf_args(args...)
+            signature = Tuple{
+                String,
+                Vector{Float64},
+                Int,
+                Type{Float64},
+                Nothing,
+                Float64,
+                Nothing,
+            }
+            inferred = Base.infer_return_type(ExaModelsPower.mpopf_args, signature)
+            @test isconcretetype(inferred)
+            @test inferred === typeof(actual)
+        end
+
         # A load curve scales the LOADS. A fixed bus shunt is fixed: case14 carries
         # bs = 19.0 at bus 9, and it is the same in every period.
         let net = ExaModelsPower.parse_mp_network(_case_path("pglib_opf_case14_ieee.m"))
-            series = PowerIO.LoadSeries(net, [1.0, 0.5]; T = Float64)
+            series = PowerIO.LoadSeries(net, [1.0, 0.5], Float64)
             d = ExaModelsPower.parse_mp_power_data(net, series, 2, 0.1, Float64)
             shunt = [b.b.bs for b in d.busarray[:, 1]]
             @test any(!iszero, shunt)

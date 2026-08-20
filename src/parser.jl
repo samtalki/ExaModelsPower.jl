@@ -9,10 +9,17 @@ convert_data(data::NamedTuple, backend) = map(d -> _convert_field(d, backend), d
 _convert_field(d, backend) = convert_array(d, backend)
 _convert_field(d::NamedTuple, backend) = convert_data(d, backend)
 
-# A case name that is not a path on disk is looked up in the bundled PGLib-OPF
-# directory, which is the one thing ExaPowerIO is still here for.
-_case_path(filename) =
-    isfile(filename) ? filename : joinpath(ExaPowerIO.get_path(:pglib), filename)
+# A bare case name that is not a file in the working directory is looked up in
+# the bundled PGLib-OPF directory, which is the one thing ExaPowerIO is still
+# here for. A path with a directory component stays a path: rebasing a missing
+# `cases/foo.m` below the PGLib artifact hides the path the caller actually
+# supplied and makes relative paths depend on the artifact layout.
+function _case_path(filename::AbstractString)
+    path = String(filename)
+    isfile(path) && return path
+    isempty(dirname(path)) || return path
+    return joinpath(ExaPowerIO.get_path(:pglib), path)
+end
 
 # `T` is a TYPE PARAMETER, not a value of type `Type`. As a plain positional
 # argument it arrives typed `Type` — abstract — and then the parse cannot

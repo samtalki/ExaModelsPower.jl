@@ -19,8 +19,9 @@ it cannot be, as for a `.json` file:
 model, vars, cons = ac_opf_model("case118.json"; from = "powermodels")
 ```
 
-A name that is not a path on disk is looked up in the bundled PGLib-OPF library, which is
-what `"pglib_opf_case118_ieee.m"` below resolves through.
+A bare name that is not a file in the working directory is looked up in the bundled
+PGLib-OPF library, which is what `"pglib_opf_case118_ieee.m"` below resolves through.
+Paths with a directory component are passed to PowerIO unchanged.
 
 ## Usage
 ### Static optimal power flow
