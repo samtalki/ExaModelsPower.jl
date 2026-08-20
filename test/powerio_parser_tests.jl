@@ -43,18 +43,14 @@ function powerio_parser_tests()
         # leaves `ExaModel(CORE, data)` unresolved under `--trim=safe`. The row types
         # must also be isbits, or the GPU backends refuse the arrays built from them.
         #
-        # Both assertions are broken against PowerIO 0.9.0: its table accessors return
-        # the JSON3 value union, so containers built from them infer as `Any`, and `T`
-        # arrives as a `Type{<:Real}` keyword that nothing downstream specializes on.
-        # The rows ARE concrete at run time, which the isbits checks assert; only
-        # inference cannot prove it. The first flips when PowerIO pins the return type;
-        # the second needs that plus a positional `::Type{T}` method to forward `T`
-        # through, since a keyword forward stays unresolved either way.
+        # Both halves hold as of PowerIO 0.9: the library pins its return type, and the
+        # wrapper forwards `T` positionally so the static parameter survives the call.
+        # Either one regressing widens the rows back to an abstract element type.
         let path = _case_path("pglib_opf_case14_ieee.m")
-            @test_broken isconcretetype(
+            @test isconcretetype(
                 Base.infer_return_type(PowerIO.parse_ac_power_data, (String,)),
             )
-            @test_broken isconcretetype(
+            @test isconcretetype(
                 Base.infer_return_type(ExaModelsPower.parse_ac_power_data, (String, Type{Float64})),
             )
             p = ExaModelsPower.parse_ac_power_data(path, Float64)

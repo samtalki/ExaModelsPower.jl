@@ -18,11 +18,13 @@ _case_path(filename) =
 # argument it arrives typed `Type` — abstract — and then the parse cannot
 # specialize, so its result is an unparameterized NamedTuple and every field
 # read off it widens to `AbstractArray{BusRow{T}} where T`. Written `::Type{T}`
-# it is a static parameter and the whole chain stays concrete.
+# it is a static parameter and the whole chain stays concrete. The forward has
+# to be positional for the same reason: PowerIO's `T` keyword is a value of an
+# abstract `Type{<:Real}`, so a keyword forward drops the static parameter.
 parse_ac_power_data(filename) = parse_ac_power_data(filename, Float64)
 function parse_ac_power_data(filename, ::Type{T}; from = nothing) where {T}
     @info "Loading power case file"
-    return PowerIO.parse_ac_power_data(_case_path(filename); from = from, T = T)
+    return PowerIO.parse_ac_power_data(_case_path(filename), T; from = from)
 end
 
 # Resolve a case name to a parsed network. The same network feeds both the
