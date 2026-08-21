@@ -9,20 +9,30 @@ convert_data(data::NamedTuple, backend) = map(d -> _convert_field(d, backend), d
 _convert_field(d, backend) = convert_array(d, backend)
 _convert_field(d::NamedTuple, backend) = convert_data(d, backend)
 
-# A case name that is not a path on disk is looked up in the bundled PGLib-OPF
-# directory, which is the one thing ExaPowerIO is still here for.
-_case_path(filename) =
-    isfile(filename) ? filename : joinpath(ExaPowerIO.get_path(:pglib), filename)
+# A bare case name that is not a file in the working directory is looked up in
+# the bundled PGLib-OPF directory, which is the one thing ExaPowerIO is still
+# here for. A path with a directory component stays a path: rebasing a missing
+# `cases/foo.m` below the PGLib artifact hides the path the caller actually
+# supplied and makes relative paths depend on the artifact layout.
+function _case_path(filename::AbstractString)
+    path = String(filename)
+    isfile(path) && return path
+    isempty(dirname(path)) || return path
+    return joinpath(ExaPowerIO.get_path(:pglib), path)
+end
 
 # `T` is a TYPE PARAMETER, not a value of type `Type`. As a plain positional
 # argument it arrives typed `Type` — abstract — and then the parse cannot
 # specialize, so its result is an unparameterized NamedTuple and every field
 # read off it widens to `AbstractArray{BusRow{T}} where T`. Written `::Type{T}`
-# it is a static parameter and the whole chain stays concrete.
+# it is a static parameter and the whole chain stays concrete. The forward has
+# to be positional for the same reason: PowerIO's `T` keyword is a value of an
+# abstract `Type{<:Real}`, so a keyword forward drops the static parameter.
 parse_ac_power_data(filename) = parse_ac_power_data(filename, Float64)
 function parse_ac_power_data(filename, ::Type{T}; from = nothing) where {T}
     @info "Loading power case file"
-    return PowerIO.parse_ac_power_data(_case_path(filename); from = from, T = T)
+    net = PowerIO.parse_file(PowerIO.BalancedNetwork, _case_path(filename); from = from)
+    return PowerIO.parse_ac_power_data(net, T, Val(:live))
 end
 
 # Resolve a case name to a parsed network. The same network feeds both the
@@ -30,5 +40,5 @@ end
 # construction rather than by assumption.
 function parse_mp_network(filename; from = nothing)
     @info "Loading power case file"
-    return PowerIO.parse_file(_case_path(filename); from = from)
+    return PowerIO.parse_file(PowerIO.BalancedNetwork, _case_path(filename); from = from)
 end

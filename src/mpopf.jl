@@ -8,7 +8,7 @@
 parse_mp_power_data(net, series, N, r) = parse_mp_power_data(net, series, N, r, Float64)
 function parse_mp_power_data(net, series, N, corrective_action_ratio, ::Type{T}) where {T}
 
-    raw = PowerIO.parse_ac_power_data(net; T = T)
+    raw = PowerIO.parse_ac_power_data(net, T, Val(:live))
     _check_periods(series, N)
 
     # No empty-storage ternary: its two branches had DIFFERENT types (a vector
@@ -30,7 +30,9 @@ function parse_mp_power_data(net, series, N, corrective_action_ratio, ::Type{T})
         arcarray = [(;a, t = t) for a in raw.arc, t in 1:N ],
         genarray = [(;g, t = t) for g in raw.gen, t in 1:N ],
         storarray = [(;s, t = t) for s in raw.storage, t in 1:N],
-        branch_rate_a = [br.rate_a for br in raw.branch],
+        rate_a = unlimited_rate.(raw.rate_a, T),
+        branch_rate_a = [unlimited_rate(br.rate_a, T) for br in raw.branch],
+        branch_thermal_ucon = [thermal_ucon(br.rate_a, T) for br in raw.branch],
         Δp = corrective_action_ratio .* (raw.pmax .- raw.pmin)
     )
 
@@ -51,9 +53,9 @@ end
 # base-case value with no sign that half the input was ignored.
 function _load_series(net, pd_path, qd_path, pd, qd, ::Type{T}) where {T}
     if pd === nothing && qd === nothing
-        return PowerIO.read_load_series(net, pd_path, qd_path; T = T)
+        return PowerIO.read_load_series(net, pd_path, qd_path, T, Val(:live))
     elseif pd !== nothing && qd !== nothing
-        return PowerIO.LoadSeries(net, pd, qd; T = T)
+        return PowerIO.LoadSeries(net, pd, qd, T, Val(:live))
     end
     throw(
         ArgumentError(
@@ -106,10 +108,10 @@ end
 function add_thermal_mp!(core, ::Union{Polar,Rect}, data, F)
     @add_con(core, c_from_thermal_limit,
         c_thermal_limit(b, F.p[b.f_idx, t], F.q[b.f_idx, t]) for (b, t) in data.barray;
-        lcon = data.rep.ninf_b)
+        lcon = data.rep.ninf_b, ucon = data.rep.thermal_ucon_b)
     @add_con(core, c_to_thermal_limit,
         c_thermal_limit(b, F.p[b.t_idx, t], F.q[b.t_idx, t]) for (b, t) in data.barray;
-        lcon = data.rep.ninf_b)
+        lcon = data.rep.ninf_b, ucon = data.rep.thermal_ucon_b)
     return core, (; c_from_thermal_limit, c_to_thermal_limit)
 end
 add_thermal_mp!(core, ::DC, data, F) = (core, (;))
@@ -172,7 +174,7 @@ mpopf_args(filename, curve; N = length(curve), T = Float64, backend = nothing,
 function mpopf_args(filename, curve, N, ::Type{T}, backend, corrective_action_ratio,
                     from = nothing) where {T}
     net = parse_mp_network(filename; from = from)
-    d = parse_mp_power_data(net, PowerIO.LoadSeries(net, curve; T = T), N,
+    d = parse_mp_power_data(net, PowerIO.LoadSeries(net, curve, T, Val(:live)), N,
                             corrective_action_ratio, T)
     return (convert_data(_mp_narrow(d, N, T), backend),)
 end
@@ -192,6 +194,7 @@ function _mp_narrow(d, N, ::Type{T}) where {T}
         pdmax = repeat(d.pdmax, 1, N), pcmax = repeat(d.pcmax, 1, N),
         dp = repeat(d.Δp, 1, N - 1), ndp = repeat(-d.Δp, 1, N - 1),
         ninf_b = fill(T(-Inf), size(d.barray)),
+        thermal_ucon_b = repeat(d.branch_thermal_ucon, 1, N),
         zero_stor = zeros(T, size(d.storarray)),
         inf_stor = fill(T(Inf), size(d.storarray)),
         ninf_stor = fill(T(-Inf), size(d.storarray)),
@@ -585,8 +588,10 @@ Construct a multi-period AC optimal power flow (MPOPF) model using different for
 
 - `filename::String`: Path to the network data file (e.g., MATPOWER).
 - `curve::AbstractVector`: A time series of demand multiplier values.
-- `active_power_data::String`: Path to a matrix of active power loads (Pd) per bus and time.
-- `reactive_power_data::String`: Path to a matrix of reactive power loads (Qd).
+- `active_power_data::String`: Path to a matrix of active power loads (Pd) per bus and time,
+  in MW, rows in the case's bus order. Pass `pd`/`qd` to supply both matrices in memory
+  instead; one without the other is an error.
+- `reactive_power_data::String`: Path to a matrix of reactive power loads (Qd), same layout.
 - `discharge_func::Function`: (Optional) A function specifying battery discharge losses.
 
 ## Keyword Arguments
@@ -595,6 +600,7 @@ Construct a multi-period AC optimal power flow (MPOPF) model using different for
 - `corrective_action_ratio::Float64`: Ratio of corrective power action allowed (default = 0.1).
 - `backend`: Optimization solver backend (deault = nothing).
 - `form::OPFForm`: the formulation — `Polar()` (default), `Rect()` or `DC()`.
+- `from`: the case format, when it cannot be inferred from the file extension.
 - `T::Type`: Floating-point type for numeric variables (default = `Float64`).
 - `storage_complementarity_constraint::Bool`: Whether to enforce complementarity for storage (only for some methods, default = false).
 - `user_callback`: User function that extends the model
@@ -705,4 +711,3 @@ function mpopf_model(
 
     return build_mpopf(data, Nbus, Np, discharge_func, form,user_callback, backend = backend, T = T, kwargs...)
 end
-
