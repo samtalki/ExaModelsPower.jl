@@ -8,7 +8,7 @@
 parse_mp_power_data(net, series, N, r) = parse_mp_power_data(net, series, N, r, Float64)
 function parse_mp_power_data(net, series, N, corrective_action_ratio, ::Type{T}) where {T}
 
-    raw = PowerIO.parse_ac_power_data(net, T)
+    raw = PowerIO.parse_ac_power_data(net, T, Val(:live))
     _check_periods(series, N)
 
     # No empty-storage ternary: its two branches had DIFFERENT types (a vector
@@ -53,9 +53,9 @@ end
 # base-case value with no sign that half the input was ignored.
 function _load_series(net, pd_path, qd_path, pd, qd, ::Type{T}) where {T}
     if pd === nothing && qd === nothing
-        return PowerIO.read_load_series(net, pd_path, qd_path, T)
+        return PowerIO.read_load_series(net, pd_path, qd_path, T, Val(:live))
     elseif pd !== nothing && qd !== nothing
-        return PowerIO.LoadSeries(net, pd, qd, T)
+        return PowerIO.LoadSeries(net, pd, qd, T, Val(:live))
     end
     throw(
         ArgumentError(
@@ -174,7 +174,7 @@ mpopf_args(filename, curve; N = length(curve), T = Float64, backend = nothing,
 function mpopf_args(filename, curve, N, ::Type{T}, backend, corrective_action_ratio,
                     from = nothing) where {T}
     net = parse_mp_network(filename; from = from)
-    d = parse_mp_power_data(net, PowerIO.LoadSeries(net, curve, T), N,
+    d = parse_mp_power_data(net, PowerIO.LoadSeries(net, curve, T, Val(:live)), N,
                             corrective_action_ratio, T)
     return (convert_data(_mp_narrow(d, N, T), backend),)
 end

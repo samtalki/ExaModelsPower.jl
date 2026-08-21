@@ -31,7 +31,8 @@ end
 parse_ac_power_data(filename) = parse_ac_power_data(filename, Float64)
 function parse_ac_power_data(filename, ::Type{T}; from = nothing) where {T}
     @info "Loading power case file"
-    return PowerIO.parse_ac_power_data(_case_path(filename), T; from = from)
+    net = PowerIO.parse_file(PowerIO.BalancedNetwork, _case_path(filename); from = from)
+    return PowerIO.parse_ac_power_data(net, T, Val(:live))
 end
 
 # Resolve a case name to a parsed network. The same network feeds both the
@@ -39,5 +40,5 @@ end
 # construction rather than by assumption.
 function parse_mp_network(filename; from = nothing)
     @info "Loading power case file"
-    return PowerIO.parse_file(_case_path(filename); from = from)
+    return PowerIO.parse_file(PowerIO.BalancedNetwork, _case_path(filename); from = from)
 end
